@@ -74,11 +74,65 @@ def _prepare_a_runtime(dict_xlsx: Path, output_dir: Path, logger: logging.Logger
     return runtime, hard_fail_rules, morph_hard_fail_rules
 
 
-def _summarize_candidates(candidates: list[dict[str, Any]], expredict_map: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def _summarize_rule_inventory(
+    target_eids: set[str],
+    expredict_map: dict[str, dict[str, Any]],
+    components_by_eid: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for eid in sorted(target_eids):
+        exp = dict(expredict_map.get(eid, {}) or {})
+        components = []
+        for comp in components_by_eid.get(eid, []) or []:
+            components.append(
+                {
+                    "comp_id": comp.get("comp_id"),
+                    "comp_order": comp.get("comp_order"),
+                    "comp_surf": comp.get("comp_surf"),
+                    "anchor_rank": comp.get("anchor_rank"),
+                    "min_gap_to_next": comp.get("min_gap_to_next"),
+                    "max_gap_to_next": comp.get("max_gap_to_next"),
+                    "order_policy": comp.get("order_policy"),
+                    "is_required": comp.get("is_required"),
+                }
+            )
+        rows.append(
+            {
+                "e_id": eid,
+                "group": exp.get("group"),
+                "canonical_form": exp.get("canonical_form") or exp.get("대표형"),
+                "gloss": exp.get("gloss") or exp.get("뜻풀이"),
+                "disconti_allowed": exp.get("disconti_allowed"),
+                "components": components,
+            }
+        )
+    return rows
+
+
+def _summarize_candidates(
+    candidates: list[dict[str, Any]],
+    expredict_map: dict[str, dict[str, Any]],
+    components_by_eid: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for cand in candidates:
         eid = str(cand.get("e_id") or "").strip()
         meta = expredict_map.get(eid, {}) if isinstance(expredict_map, dict) else {}
+        debug_meta = dict(cand.get("debug_meta") or {})
+        comp_rows = []
+        for comp in components_by_eid.get(eid, []) or []:
+            comp_rows.append(
+                {
+                    "comp_id": comp.get("comp_id"),
+                    "comp_order": comp.get("comp_order"),
+                    "comp_surf": comp.get("comp_surf"),
+                    "anchor_rank": comp.get("anchor_rank"),
+                    "min_gap_to_next": comp.get("min_gap_to_next"),
+                    "max_gap_to_next": comp.get("max_gap_to_next"),
+                    "order_policy": comp.get("order_policy"),
+                    "is_required": comp.get("is_required"),
+                }
+            )
         out.append(
             {
                 "e_id": eid,
@@ -90,10 +144,16 @@ def _summarize_candidates(candidates: list[dict[str, Any]], expredict_map: dict[
                 "group": meta.get("group"),
                 "canonical_form": meta.get("canonical_form") or meta.get("대표형"),
                 "gloss": meta.get("gloss") or meta.get("뜻풀이"),
+                "disconti_allowed": meta.get("disconti_allowed"),
+                "components": comp_rows,
+                "bridge_detail": debug_meta.get("bridge") or debug_meta.get("bridge_detail"),
+                "thing_bridge_detail": debug_meta.get("thing_bridge") or debug_meta.get("thing_bridge_detail"),
+                "failure_reason": debug_meta.get("failure_reason"),
+                "search_ranges": debug_meta.get("search_ranges"),
+                "gap_violations": debug_meta.get("gap_violations"),
             }
         )
     return out
-
 
 def _detect_and_filter_candidates(
     *,
@@ -111,9 +171,11 @@ def _detect_and_filter_candidates(
         meta={"example_id": row_id, "instance_id": row_id},
     )
     expredict_map = dict(runtime.get("expredict_map") or {})
+    components_by_eid = dict(runtime.get("components_by_eid") or {})
     raw_candidates = [dict(c) for c in _detect_candidates_for_instance(instance, runtime)]
     debug = {
-        "raw_detected_candidates": _summarize_candidates(raw_candidates, expredict_map),
+        "rule_inventory": _summarize_rule_inventory(A_DEBUG_EIDS, expredict_map, components_by_eid),
+        "raw_detected_candidates": _summarize_candidates(raw_candidates, expredict_map, components_by_eid),
         "after_hard_drop_candidates": [],
         "after_group_filter_candidates": [],
     }
@@ -140,14 +202,14 @@ def _detect_and_filter_candidates(
         c for c in raw_candidates
         if str(c.get("triage", "")) != "discard" and not bool(c.get("hard_fail_triggered", False))
     ]
-    debug["after_hard_drop_candidates"] = _summarize_candidates(kept_after_hard_drop, expredict_map)
+    debug["after_hard_drop_candidates"] = _summarize_candidates(kept_after_hard_drop, expredict_map, components_by_eid)
 
     kept = [
         c for c in kept_after_hard_drop
         if str(c.get("e_id") or "").strip() in A_DEBUG_EIDS
     ]
     kept.sort(key=lambda c: float(c.get("score", 0.0)), reverse=True)
-    debug["after_group_filter_candidates"] = _summarize_candidates(kept, expredict_map)
+    debug["after_group_filter_candidates"] = _summarize_candidates(kept, expredict_map, components_by_eid)
     return kept, debug
 
 
@@ -320,6 +382,7 @@ def _write_debug_detection(path: Path, rows: list[dict[str, Any]]) -> None:
             payload = {
                 "id": row.get("id", ""),
                 "sentence": row.get("sentence", ""),
+                "rule_inventory": row.get("rule_inventory", []),
                 "raw_detected_candidates": row.get("raw_detected_candidates", []),
                 "after_hard_drop_candidates": row.get("after_hard_drop_candidates", []),
                 "after_group_filter_candidates": row.get("after_group_filter_candidates", []),
@@ -364,6 +427,7 @@ def main() -> None:
                 'top1_confidence': None,
                 'threshold': float(args.threshold),
                 'error': None,
+                'rule_inventory': debug['rule_inventory'],
                 'raw_detected_candidates': debug['raw_detected_candidates'],
                 'after_hard_drop_candidates': debug['after_hard_drop_candidates'],
                 'after_group_filter_candidates': debug['after_group_filter_candidates'],
@@ -394,6 +458,7 @@ def main() -> None:
             'downstream_input_text_b': raw_output.get('downstream_input_text_b'),
             'downstream_input_version': raw_output.get('downstream_input_version'),
             'downstream_input_text_b_format': raw_output.get('downstream_input_text_b_format'),
+            'rule_inventory': debug['rule_inventory'],
             'raw_detected_candidates': debug['raw_detected_candidates'],
             'after_hard_drop_candidates': debug['after_hard_drop_candidates'],
             'after_group_filter_candidates': debug['after_group_filter_candidates'],
