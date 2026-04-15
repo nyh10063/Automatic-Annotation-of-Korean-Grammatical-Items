@@ -19,6 +19,9 @@ from kmwe.stages.eval_rule_gold import _detect_candidates_for_instance, _prepare
 from kmwe.utils.morph import analyze_with_kiwi
 
 
+B_DEBUG_EIDS = {"ece002", "ece003", "edf004", "edf005", "ept001", "ept002", "ept003"}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Public B-pipeline LLM runner")
     parser.add_argument("--input_csv", required=True, type=Path)
@@ -118,6 +121,27 @@ def _prepare_b_runtime(dict_xlsx: Path, output_dir: Path, logger: logging.Logger
     return runtime, hard_fail_rules, morph_hard_fail_rules
 
 
+def _summarize_candidates(candidates: list[dict[str, Any]], expredict_map: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for cand in candidates:
+        eid = str(cand.get("e_id") or "").strip()
+        meta = expredict_map.get(eid, {}) if isinstance(expredict_map, dict) else {}
+        out.append(
+            {
+                "e_id": eid,
+                "score": cand.get("score"),
+                "triage": cand.get("triage"),
+                "hard_fail_triggered": bool(cand.get("hard_fail_triggered", False)),
+                "span_segments": cand.get("span_segments") or [],
+                "matched_text": cand.get("matched_text") or cand.get("surface_text") or cand.get("text") or "",
+                "group": meta.get("group"),
+                "canonical_form": meta.get("canonical_form") or meta.get("대표형"),
+                "gloss": meta.get("gloss") or meta.get("뜻풀이"),
+            }
+        )
+    return out
+
+
 def _detect_and_filter_candidates(
     *,
     row_id: str,
@@ -126,16 +150,22 @@ def _detect_and_filter_candidates(
     hard_fail_rules: list[dict[str, Any]],
     morph_hard_fail_rules: list[dict[str, Any]],
     verify_window_chars: int,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     instance = RuleEvalInstance(
         example_key=row_id,
         sentence=sentence,
         gold_e_id="",
         meta={"example_id": row_id, "instance_id": row_id},
     )
-    candidates = list(_detect_candidates_for_instance(instance, runtime))
-    if not candidates:
-        return []
+    expredict_map = dict(runtime.get("expredict_map") or {})
+    raw_candidates = [dict(c) for c in _detect_candidates_for_instance(instance, runtime)]
+    debug = {
+        "raw_detected_candidates": _summarize_candidates(raw_candidates, expredict_map),
+        "after_hard_drop_candidates": [],
+        "after_group_filter_candidates": [],
+    }
+    if not raw_candidates:
+        return [], debug
 
     morph_tokens = analyze_with_kiwi(sentence, model=runtime["kiwi_model"])
     for token in morph_tokens:
@@ -143,7 +173,7 @@ def _detect_and_filter_candidates(
 
     silver_loader._apply_verify_rules(
         raw_sentence=sentence,
-        candidates=candidates,
+        candidates=raw_candidates,
         rules=hard_fail_rules,
         morph_rules=morph_hard_fail_rules,
         morph_tokens=morph_tokens,
@@ -153,9 +183,19 @@ def _detect_and_filter_candidates(
         verify_window_chars=verify_window_chars,
     )
 
-    kept = [c for c in candidates if str(c.get("triage", "")) != "discard" and not bool(c.get("hard_fail_triggered", False))]
+    kept_after_hard_drop = [
+        c for c in raw_candidates
+        if str(c.get("triage", "")) != "discard" and not bool(c.get("hard_fail_triggered", False))
+    ]
+    debug["after_hard_drop_candidates"] = _summarize_candidates(kept_after_hard_drop, expredict_map)
+
+    kept = [
+        c for c in kept_after_hard_drop
+        if str(c.get("e_id") or "").strip() in B_DEBUG_EIDS
+    ]
     kept.sort(key=lambda c: float(c.get("score", 0.0)), reverse=True)
-    return kept
+    debug["after_group_filter_candidates"] = _summarize_candidates(kept, expredict_map)
+    return kept, debug
 
 
 def _build_messages(sentence: str, candidates: list[dict[str, Any]], expredict_map: dict[str, dict[str, Any]]) -> tuple[list[dict[str, str]], list[str], list[list[int]], str, str]:
@@ -272,6 +312,7 @@ def _write_summary(path: Path, rows: list[dict[str, Any]], args: argparse.Namesp
         "policy": {
             "candidate_stage": "detect",
             "hard_drop_only": True,
+            "group_filter": sorted(B_DEBUG_EIDS),
             "allow_multiple": False,
             "prompt_source": "build_bgroup_sft._build_prompt_core",
         },
@@ -288,6 +329,19 @@ def _write_prompt_preview(path: Path, row: dict[str, Any]) -> None:
         "prompt_text": row.get("prompt_text", ""),
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _write_debug_detection(path: Path, rows: list[dict[str, Any]]) -> None:
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            payload = {
+                "id": row.get("id", ""),
+                "sentence": row.get("sentence", ""),
+                "raw_detected_candidates": row.get("raw_detected_candidates", []),
+                "after_hard_drop_candidates": row.get("after_hard_drop_candidates", []),
+                "after_group_filter_candidates": row.get("after_group_filter_candidates", []),
+            }
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def main() -> None:
@@ -310,7 +364,7 @@ def main() -> None:
     for row in rows:
         rid = row["id"]
         sentence = row["sentence"]
-        candidates = _detect_and_filter_candidates(
+        candidates, debug = _detect_and_filter_candidates(
             row_id=rid,
             sentence=sentence,
             runtime=runtime,
@@ -331,6 +385,9 @@ def main() -> None:
                     "raw_output": "",
                     "error_type": None,
                     "prompt_text": "",
+                    "raw_detected_candidates": debug["raw_detected_candidates"],
+                    "after_hard_drop_candidates": debug["after_hard_drop_candidates"],
+                    "after_group_filter_candidates": debug["after_group_filter_candidates"],
                 }
             )
             continue
@@ -357,12 +414,16 @@ def main() -> None:
                 "error_type": parsed["error_type"],
                 "messages": messages,
                 "prompt_text": prompt_text,
+                "raw_detected_candidates": debug["raw_detected_candidates"],
+                "after_hard_drop_candidates": debug["after_hard_drop_candidates"],
+                "after_group_filter_candidates": debug["after_group_filter_candidates"],
             }
         )
 
     _write_csv(args.output_dir / "predictions.csv", pred_rows)
     _write_jsonl(args.output_dir / "predictions.jsonl", pred_rows)
     _write_summary(args.output_dir / "summary.json", pred_rows, args)
+    _write_debug_detection(args.output_dir / "debug_detection.jsonl", pred_rows)
     if pred_rows:
         _write_prompt_preview(args.output_dir / "prompt_preview_first.json", pred_rows[0])
     logger.info("wrote outputs under %s", args.output_dir)
