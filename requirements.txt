@@ -7,3 +7,4 @@ numpy
 torch
 transformers
 accelerate
+openai

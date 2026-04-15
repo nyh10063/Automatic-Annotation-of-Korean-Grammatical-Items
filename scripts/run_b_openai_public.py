@@ -5,20 +5,21 @@ import argparse
 import csv
 import json
 import logging
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from kmwe.data.factory import AGROUP_INPUT_CONSTRUCTION_VERSION_V2
+from openai import OpenAI
+
 from kmwe.data.rule_eval import RuleEvalConfig, RuleEvalInstance
 from kmwe.stages import build_silver as silver_loader
+from kmwe.stages.build_bgroup_sft import _build_prompt_core
 from kmwe.stages.eval_rule_gold import _detect_candidates_for_instance, _prepare_runtime
-from kmwe.stages.infer_step1 import _apply_encoder_confidence, _build_encoder_scorer, _score_candidates_with_encoder
 from kmwe.utils.morph import analyze_with_kiwi
 
 
-DEFAULT_A_THRESHOLD = 0.55
-A_DEBUG_EIDS = {"ece001", "edf003"}
+B_DEBUG_EIDS = {"ece002", "ece003", "edf004", "edf005", "ept001", "ept002", "ept003"}
 
 
 REVIEWER_LABELS = {
@@ -35,14 +36,13 @@ REVIEWER_LABELS = {
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Public A-pipeline encoder runner")
+    parser = argparse.ArgumentParser(description="Optional public B-pipeline OpenAI API runner")
     parser.add_argument("--input_csv", required=True, type=Path)
     parser.add_argument("--output_dir", required=True, type=Path)
-    parser.add_argument("--best_dir", required=True, type=Path)
     parser.add_argument("--dict_xlsx", required=True, type=Path)
+    parser.add_argument("--model", default=os.environ.get("OPENAI_MODEL", "gpt-4.1"))
+    parser.add_argument("--max_output_tokens", type=int, default=16)
     parser.add_argument("--verify_window_chars", type=int, default=20)
-    parser.add_argument("--threshold", type=float, default=DEFAULT_A_THRESHOLD)
-    parser.add_argument("--batch_size", type=int, default=64)
     return parser.parse_args()
 
 
@@ -86,7 +86,34 @@ def _read_input_csv(path: Path) -> list[dict[str, str]]:
     return rows
 
 
-def _prepare_a_runtime(dict_xlsx: Path, output_dir: Path, logger: logging.Logger) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+def _build_openai_client() -> OpenAI:
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise RuntimeError(
+            "OPENAI_API_KEY is not set. "
+            "Set it before running, for example: export OPENAI_API_KEY='your_api_key'. "
+            "Do not commit API keys to GitHub."
+        )
+    return OpenAI()
+
+
+def _parse_single_decision(raw_text: str, candidate_e_ids: list[str]) -> dict[str, Any]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return {"status": "parse_failure", "pred_e_ids": [], "decision_line": "", "error_type": "empty_output"}
+    line = text.splitlines()[0].strip()
+    if line.upper().startswith("DECISION:"):
+        line = line.split(":", 1)[1].strip()
+    if line == "NONE":
+        return {"status": "ok", "pred_e_ids": [], "decision_line": line, "error_type": None}
+    if not line.isdigit():
+        return {"status": "protocol_failure", "pred_e_ids": [], "decision_line": line, "error_type": "non_numeric_decision"}
+    idx = int(line) - 1
+    if idx < 0 or idx >= len(candidate_e_ids):
+        return {"status": "protocol_failure", "pred_e_ids": [], "decision_line": line, "error_type": "candidate_index_out_of_range"}
+    return {"status": "ok", "pred_e_ids": [candidate_e_ids[idx]], "decision_line": line, "error_type": None}
+
+
+def _prepare_b_runtime(dict_xlsx: Path, output_dir: Path, logger: logging.Logger) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     cfg = {
         "paths": {"dict_xlsx": str(dict_xlsx)},
         "silver": {
@@ -97,7 +124,7 @@ def _prepare_a_runtime(dict_xlsx: Path, output_dir: Path, logger: logging.Logger
         },
     }
     rule_cfg = RuleEvalConfig(gold_path=str(dict_xlsx), dict_path=str(dict_xlsx))
-    run_context = SimpleNamespace(run_dir=output_dir, exp_id="public_release", run_id="a_public")
+    run_context = SimpleNamespace(run_dir=output_dir, exp_id="public_release", run_id="b_public")
     runtime = _prepare_runtime(cfg, rule_cfg, run_context, logger)
 
     _, _, dict_bundle = silver_loader._load_dict_stats(cfg)
@@ -210,7 +237,7 @@ def _detect_and_filter_candidates(
     components_by_eid = dict(runtime.get("components_by_eid") or {})
     raw_candidates = [dict(c) for c in _detect_candidates_for_instance(instance, runtime)]
     debug = {
-        "rule_inventory": _summarize_rule_inventory(A_DEBUG_EIDS, expredict_map, components_by_eid),
+        "rule_inventory": _summarize_rule_inventory(B_DEBUG_EIDS, expredict_map, components_by_eid),
         "raw_detected_candidates": _summarize_candidates(raw_candidates, expredict_map, components_by_eid),
         "after_hard_drop_candidates": [],
         "after_group_filter_candidates": [],
@@ -242,185 +269,78 @@ def _detect_and_filter_candidates(
 
     kept = [
         c for c in kept_after_hard_drop
-        if str(c.get("e_id") or "").strip() in A_DEBUG_EIDS
+        if str(c.get("e_id") or "").strip() in B_DEBUG_EIDS
     ]
     kept.sort(key=lambda c: float(c.get("score", 0.0)), reverse=True)
     debug["after_group_filter_candidates"] = _summarize_candidates(kept, expredict_map, components_by_eid)
     return kept, debug
 
 
-def _build_scorer(best_dir: Path, output_dir: Path, logger: logging.Logger):
-    cfg = {
-        "infer": {
-            "encoder_scoring_checkpoint": str(best_dir),
-            "scoring_method": "head_logits",
-        },
-        "runtime": {},
-    }
-    # infer_step1._build_encoder_scorer always calls _artifacts_root_from_outputs_dir()
-    # even when encoder_scoring_checkpoint override is provided. For the public runner we
-    # keep the original scorer path, but hand it a synthetic deep outputs_dir so that the
-    # depth check passes without changing the original scoring logic.
-    synthetic_outputs_dir = output_dir / '_public_release' / 'exp' / 'run' / 'outputs'
-    synthetic_outputs_dir.mkdir(parents=True, exist_ok=True)
-    run_context = SimpleNamespace(outputs_dir=synthetic_outputs_dir, exp_id="public_release")
-    return _build_encoder_scorer(
-        cfg=cfg,
-        run_context=run_context,
-        enabled=True,
-        max_seq_len=256,
-        logger=logger,
-        require_head_logits=True,
-        disallow_fallback_scoring=True,
-    )
+def _build_messages(sentence: str, candidates: list[dict[str, Any]], expredict_map: dict[str, dict[str, Any]]) -> tuple[list[dict[str, str]], list[str], list[list[int]], str, str]:
+    if not candidates:
+        raise ValueError("cannot build prompt without candidates")
 
+    primary = candidates[0]
+    primary_spans = primary.get("span_segments") or []
+    filtered = [c for c in candidates if (c.get("span_segments") or []) == primary_spans]
+    if not filtered:
+        filtered = candidates
 
-def _span_key(candidate: dict[str, Any]) -> tuple[tuple[int, int], ...]:
-    spans = candidate.get("span_segments") or []
-    norm: list[tuple[int, int]] = []
-    for item in spans:
-        if isinstance(item, (list, tuple)) and len(item) >= 2:
-            try:
-                norm.append((int(item[0]), int(item[1])))
-            except (TypeError, ValueError):
-                continue
-    return tuple(norm)
-
-
-def _run_a_downstream(
-    *,
-    candidates: list[dict[str, Any]],
-    sentence: str,
-    runtime: dict[str, Any],
-    scorer: Any,
-    threshold: float,
-    batch_size: int,
-    logger: logging.Logger,
-) -> tuple[list[str], dict[str, Any], str | None, list[dict[str, Any]]]:
-    scored = [dict(c) for c in candidates]
-    _score_candidates_with_encoder(
-        candidates=scored,
-        raw_sentence=sentence,
-        context_left="",
-        context_right="",
-        scorer=scorer,
-        scoring_enabled=True,
-        batch_size=batch_size,
-        logger=logger,
-        require_head_logits=True,
-        expredict_map=dict(runtime.get("expredict_map") or {}),
-        input_construction_version=AGROUP_INPUT_CONSTRUCTION_VERSION_V2,
-    )
-    scored = _apply_encoder_confidence(
-        scored,
-        use_sigmoid_prob=True,
-        temperature=1.0,
-        write_encoder_prob=True,
-        encoder_prob_field="encoder_prob",
-        encoder_prob_only_when_head_logits=True,
-        encoder_scoring_method="head_logits",
-    )
-    scored.sort(
-        key=lambda c: (
-            float(c.get("confidence", 0.0) or 0.0),
-            float(c.get("encoder_score", 0.0) or 0.0),
-            str(c.get("e_id") or ""),
-        ),
-        reverse=True,
-    )
-    if not scored:
-        return [], {"top1_confidence": None, "n_candidates": 0, "selected_by_span": []}, "no_candidates_after_rule_gate", scored
-
-    best_by_span: dict[tuple[tuple[int, int], ...], dict[str, Any]] = {}
-    for cand in scored:
-        key = _span_key(cand)
-        if not key:
-            key = ((-1, -1),)
-        if key not in best_by_span:
-            best_by_span[key] = cand
-
-    selected_by_span: list[dict[str, Any]] = []
-    pred_eids: list[str] = []
-    for key, cand in sorted(best_by_span.items(), key=lambda kv: kv[0]):
-        conf = float(cand.get("confidence", 0.0) or 0.0)
+    candidate_e_ids: list[str] = []
+    seen: set[str] = set()
+    for cand in filtered:
         eid = str(cand.get("e_id") or "").strip()
-        selected = bool(eid and conf >= float(threshold))
-        if selected:
-            pred_eids.append(eid)
-        selected_by_span.append(
-            {
-                "span_key": [[int(s), int(e)] for s, e in key],
-                "e_id": eid or None,
-                "confidence": conf,
-                "threshold": float(threshold),
-                "selected": selected,
-                "encoder_score": cand.get("encoder_score"),
-                "encoder_prob": cand.get("encoder_prob"),
-                "downstream_input_text_a": cand.get("encoder_input_text_a"),
-                "downstream_input_text_b": cand.get("encoder_input_text_b"),
-                "downstream_input_version": cand.get("encoder_input_version") or AGROUP_INPUT_CONSTRUCTION_VERSION_V2,
-                "downstream_input_text_b_format": cand.get("encoder_input_text_b_format"),
-            }
-        )
+        if eid and eid not in seen:
+            seen.add(eid)
+            candidate_e_ids.append(eid)
 
-    top1 = scored[0]
-    top1_conf = float(top1.get("confidence", 0.0) or 0.0)
-    raw_output = {
-        "top1_e_id": str(top1.get("e_id") or "").strip() or None,
-        "top1_confidence": top1_conf,
-        "threshold": float(threshold),
-        "n_candidates": len(scored),
-        "downstream_candidate_e_ids": [str(c.get("e_id") or "").strip() for c in scored],
-        "selected_by_span": selected_by_span,
-        "pred_e_ids": pred_eids,
-        "downstream_input_text_a": top1.get("encoder_input_text_a"),
-        "downstream_input_text_b": top1.get("encoder_input_text_b"),
-        "downstream_input_version": top1.get("encoder_input_version") or AGROUP_INPUT_CONSTRUCTION_VERSION_V2,
-        "downstream_input_text_b_format": top1.get("encoder_input_text_b_format"),
+    prompt_row = {
+        "target_sentence": sentence,
+        "span_segments_parsed": primary_spans,
+        "candidate_e_ids": candidate_e_ids,
     }
-    if not pred_eids:
-        return [], raw_output, f"all_span_top1_below_threshold<{threshold:.2f}", scored
-    return pred_eids, raw_output, None, scored
+    system_prompt, user_prompt = _build_prompt_core(
+        prompt_row,
+        expredict_map,
+        allow_multiple=False,
+    )
+
+    target_span_text = ""
+    for line in user_prompt.splitlines():
+        if line.startswith("표적 표현:"):
+            target_span_text = line.split(":", 1)[1].strip()
+            break
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    prompt_text = system_prompt + "\n\n" + user_prompt
+    return messages, candidate_e_ids, primary_spans, target_span_text, prompt_text
 
 
-def _candidate_span_text(sentence: str, span_key: list[list[int]] | None) -> str:
-    pieces: list[str] = []
-    for span in span_key or []:
-        if not isinstance(span, list) or len(span) < 2:
-            continue
-        try:
-            start, end = int(span[0]), int(span[1])
-        except (TypeError, ValueError):
-            continue
-        if 0 <= start < end <= len(sentence):
-            pieces.append(sentence[start:end])
-    return " ".join(pieces)
+def _extract_openai_text(response: Any) -> str:
+    output_text = getattr(response, "output_text", None)
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+
+    chunks: list[str] = []
+    for item in getattr(response, "output", []) or []:
+        for content in getattr(item, "content", []) or []:
+            text = getattr(content, "text", None)
+            if isinstance(text, str):
+                chunks.append(text)
+    return "\n".join(chunks).strip()
 
 
-def _prediction_forms(row: dict[str, Any]) -> list[str]:
-    forms: list[str] = []
-    pred_eids = set(row.get("pred_e_ids") or [])
-    for item in row.get("selected_by_span") or []:
-        eid = str(item.get("e_id") or "").strip()
-        if eid in pred_eids:
-            text_b = str(item.get("downstream_input_text_b") or "")
-            form = text_b.splitlines()[0].strip() if text_b else eid
-            if form and form not in forms:
-                forms.append(form)
-    return forms
-
-
-def _prediction_spans(row: dict[str, Any]) -> list[str]:
-    spans: list[str] = []
-    sentence = str(row.get("sentence") or "")
-    pred_eids = set(row.get("pred_e_ids") or [])
-    for item in row.get("selected_by_span") or []:
-        eid = str(item.get("e_id") or "").strip()
-        if eid in pred_eids:
-            span_text = _candidate_span_text(sentence, item.get("span_key"))
-            if span_text and span_text not in spans:
-                spans.append(span_text)
-    return spans
+def _generate_one(*, client: OpenAI, model: str, messages: list[dict[str, Any]], max_output_tokens: int) -> str:
+    response = client.responses.create(
+        model=model,
+        input=messages,
+        temperature=0,
+        max_output_tokens=max_output_tokens,
+    )
+    return _extract_openai_text(response)
 
 
 def _forms_for_eids(eids: list[str], expredict_map: dict[str, dict[str, Any]]) -> list[str]:
@@ -449,10 +369,10 @@ def _write_csv(path: Path, rows: list[dict[str, Any]], expredict_map: dict[str, 
     fieldnames = [
         "id",
         "sentence",
+        "target_span_text",
         "candidate_e_ids",
         "pred_e_ids",
         "pred_glosses",
-        "predicted_spans",
     ]
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -463,10 +383,10 @@ def _write_csv(path: Path, rows: list[dict[str, Any]], expredict_map: dict[str, 
                 {
                     "id": row.get("id", ""),
                     "sentence": row.get("sentence", ""),
+                    "target_span_text": row.get("target_span_text", ""),
                     "candidate_e_ids": ";".join(_forms_for_eids(row.get("candidate_e_ids", []) or [], expredict_map)),
                     "pred_e_ids": ";".join(_forms_for_eids(pred_eids, expredict_map)),
                     "pred_glosses": ";".join(_glosses_for_eids(pred_eids, expredict_map)),
-                    "predicted_spans": ";".join(_prediction_spans(row)),
                 }
             )
 
@@ -480,42 +400,37 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 def _write_summary(path: Path, rows: list[dict[str, Any]], args: argparse.Namespace) -> None:
     summary = {
         "n_rows": len(rows),
-        "n_predicted": sum(1 for r in rows if r.get("pred_e_ids") or r.get("pred_e_id")),
+        "n_ok": sum(1 for r in rows if r.get("status") == "ok"),
         "n_no_candidate": sum(1 for r in rows if r.get("status") == "no_candidate"),
-        "n_below_threshold": sum(1 for r in rows if r.get("status") == "below_threshold"),
+        "n_parse_failure": sum(1 for r in rows if r.get("status") == "parse_failure"),
+        "n_protocol_failure": sum(1 for r in rows if r.get("status") == "protocol_failure"),
         "input_csv": str(args.input_csv),
-        "best_dir": str(args.best_dir),
+        "backend": "openai",
+        "model": str(args.model),
         "dict_xlsx": str(args.dict_xlsx),
         "verify_window_chars": args.verify_window_chars,
-        "threshold": args.threshold,
-        "batch_size": args.batch_size,
+        "max_output_tokens": args.max_output_tokens,
         "policy": {
             "candidate_stage": "detect",
             "hard_drop_only": True,
-            "group_filter": sorted(A_DEBUG_EIDS),
-            "final_selection_policy": "span_top1_multi_label_per_sentence",
-            "encoder_input_source": "infer_step1._score_candidates_with_encoder",
-            "encoder_input_version": AGROUP_INPUT_CONSTRUCTION_VERSION_V2,
+            "group_filter": sorted(B_DEBUG_EIDS),
+            "allow_multiple": False,
+            "prompt_source": "build_bgroup_sft._build_prompt_core",
+            "default_reproduction_path": "qwen_runner",
         },
     }
-    path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
+    path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _write_input_preview(path: Path, row: dict[str, Any]) -> None:
+def _write_prompt_preview(path: Path, row: dict[str, Any]) -> None:
     payload = {
         "id": row.get("id", ""),
         "sentence": row.get("sentence", ""),
+        "target_span_text": row.get("target_span_text", ""),
         "candidate_e_ids": row.get("candidate_e_ids", []),
-        "top1_e_id": row.get("top1_e_id", None),
-        "top1_confidence": row.get("top1_confidence", None),
-        "pred_e_ids": row.get("pred_e_ids", []),
-        "selected_by_span": row.get("selected_by_span", []),
-        "downstream_input_text_a": row.get("downstream_input_text_a", None),
-        "downstream_input_text_b": row.get("downstream_input_text_b", None),
-        "downstream_input_version": row.get("downstream_input_version", None),
-        "downstream_input_text_b_format": row.get("downstream_input_text_b_format", None),
+        "prompt_text": row.get("prompt_text", ""),
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _write_debug_detection(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -534,22 +449,22 @@ def _write_debug_detection(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def main() -> None:
     args = parse_args()
-    logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
-    logger = logging.getLogger('run_a_public')
+    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+    logger = logging.getLogger("run_b_openai_public")
 
     args.input_csv = args.input_csv.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    args.best_dir = args.best_dir.resolve()
     args.dict_xlsx = args.dict_xlsx.resolve()
 
     rows = _read_input_csv(args.input_csv)
-    runtime, hard_fail_rules, morph_hard_fail_rules = _prepare_a_runtime(args.dict_xlsx, args.output_dir, logger)
-    scorer = _build_scorer(args.best_dir, args.output_dir, logger)
+    client = _build_openai_client()
+    runtime, hard_fail_rules, morph_hard_fail_rules = _prepare_b_runtime(args.dict_xlsx, args.output_dir, logger)
+    expredict_map = dict(runtime.get("expredict_map") or {})
 
     pred_rows: list[dict[str, Any]] = []
     for row in rows:
-        rid = row['id']
-        sentence = row['sentence']
+        rid = row["id"]
+        sentence = row["sentence"]
         candidates, debug = _detect_and_filter_candidates(
             row_id=rid,
             sentence=sentence,
@@ -559,64 +474,63 @@ def main() -> None:
             verify_window_chars=args.verify_window_chars,
         )
         if not candidates:
-            pred_rows.append({
-                'id': rid,
-                'sentence': sentence,
-                'status': 'no_candidate',
-                'candidate_e_ids': [],
-                'pred_e_id': None,
-                'pred_e_ids': [],
-                'top1_e_id': None,
-                'top1_confidence': None,
-                'threshold': float(args.threshold),
-                'error': None,
-                'rule_inventory': debug['rule_inventory'],
-                'raw_detected_candidates': debug['raw_detected_candidates'],
-                'after_hard_drop_candidates': debug['after_hard_drop_candidates'],
-                'after_group_filter_candidates': debug['after_group_filter_candidates'],
-            })
+            pred_rows.append(
+                {
+                    "id": rid,
+                    "sentence": sentence,
+                    "status": "no_candidate",
+                    "target_span_text": "",
+                    "candidate_e_ids": [],
+                    "pred_e_ids": [],
+                    "decision_line": "",
+                    "raw_output": "",
+                    "error_type": None,
+                    "prompt_text": "",
+                    "rule_inventory": debug["rule_inventory"],
+                    "raw_detected_candidates": debug["raw_detected_candidates"],
+                    "after_hard_drop_candidates": debug["after_hard_drop_candidates"],
+                    "after_group_filter_candidates": debug["after_group_filter_candidates"],
+                }
+            )
             continue
 
-        pred_eids, raw_output, err, scored = _run_a_downstream(
-            candidates=candidates,
-            sentence=sentence,
-            runtime=runtime,
-            scorer=scorer,
-            threshold=float(args.threshold),
-            batch_size=int(args.batch_size),
-            logger=logger,
+        messages, candidate_e_ids, primary_spans, target_span_text, prompt_text = _build_messages(sentence, candidates, expredict_map)
+        raw_output = _generate_one(
+            client=client,
+            model=str(args.model),
+            messages=messages,
+            max_output_tokens=args.max_output_tokens,
         )
-        status = 'ok' if pred_eids else ('below_threshold' if err and err.startswith('all_span_top1_below_threshold') else 'error')
-        pred_rows.append({
-            'id': rid,
-            'sentence': sentence,
-            'status': status,
-            'candidate_e_ids': [str(c.get('e_id') or '').strip() for c in scored],
-            'pred_e_id': pred_eids[0] if pred_eids else None,
-            'pred_e_ids': pred_eids,
-            'top1_e_id': raw_output.get('top1_e_id'),
-            'top1_confidence': raw_output.get('top1_confidence'),
-            'threshold': raw_output.get('threshold'),
-            'error': err,
-            'selected_by_span': raw_output.get('selected_by_span', []),
-            'downstream_input_text_a': raw_output.get('downstream_input_text_a'),
-            'downstream_input_text_b': raw_output.get('downstream_input_text_b'),
-            'downstream_input_version': raw_output.get('downstream_input_version'),
-            'downstream_input_text_b_format': raw_output.get('downstream_input_text_b_format'),
-            'rule_inventory': debug['rule_inventory'],
-            'raw_detected_candidates': debug['raw_detected_candidates'],
-            'after_hard_drop_candidates': debug['after_hard_drop_candidates'],
-            'after_group_filter_candidates': debug['after_group_filter_candidates'],
-        })
+        parsed = _parse_single_decision(raw_output, candidate_e_ids)
+        pred_rows.append(
+            {
+                "id": rid,
+                "sentence": sentence,
+                "status": parsed["status"],
+                "target_span_text": target_span_text,
+                "primary_span_segments": primary_spans,
+                "candidate_e_ids": candidate_e_ids,
+                "pred_e_ids": parsed["pred_e_ids"],
+                "decision_line": parsed["decision_line"],
+                "raw_output": raw_output,
+                "error_type": parsed["error_type"],
+                "messages": messages,
+                "prompt_text": prompt_text,
+                "rule_inventory": debug["rule_inventory"],
+                "raw_detected_candidates": debug["raw_detected_candidates"],
+                "after_hard_drop_candidates": debug["after_hard_drop_candidates"],
+                "after_group_filter_candidates": debug["after_group_filter_candidates"],
+            }
+        )
 
-    _write_csv(args.output_dir / 'predictions.csv', pred_rows, dict(runtime.get('expredict_map') or {}))
-    _write_jsonl(args.output_dir / 'predictions.jsonl', pred_rows)
-    _write_summary(args.output_dir / 'summary.json', pred_rows, args)
-    _write_debug_detection(args.output_dir / 'debug_detection.jsonl', pred_rows)
+    _write_csv(args.output_dir / "predictions.csv", pred_rows, expredict_map)
+    _write_jsonl(args.output_dir / "predictions.jsonl", pred_rows)
+    _write_summary(args.output_dir / "summary.json", pred_rows, args)
+    _write_debug_detection(args.output_dir / "debug_detection.jsonl", pred_rows)
     if pred_rows:
-        _write_input_preview(args.output_dir / 'input_preview_first.json', pred_rows[0])
-    logger.info('wrote outputs under %s', args.output_dir)
+        _write_prompt_preview(args.output_dir / "prompt_preview_first.json", pred_rows[0])
+    logger.info("wrote outputs under %s", args.output_dir)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

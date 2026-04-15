@@ -1,14 +1,65 @@
 # Reproduce Reviewer Runs
 
-## Sample run
+This document describes the minimal inference workflow.
 
-1. Run `scripts/check_env.sh`
-2. Run `scripts/run_a_infer.sh`
-3. Run `scripts/run_b_infer.sh`
-4. If gold labels are available, run the corresponding eval scripts.
+## 1. Prepare Input
 
-## Reviewer run
+Create a CSV file with a single `sentence` column.
 
-1. Put your input files under `reviewer_inputs/`
-2. Run the corresponding pipeline script
-3. Check outputs under `outputs/`
+```csv
+sentence
+"나도 언니처럼 예쁘다면 참 좋을 텐데."
+"저는 제주도에 간 적이 있습니다."
+```
+
+Place it under `reviewer_inputs/`, or pass its path directly to the scripts.
+
+## 2. Prepare Checkpoints
+
+A pipeline expects:
+
+```text
+checkpoints/a_best/encoder
+checkpoints/a_best/tokenizer
+checkpoints/a_best/head.pt
+```
+
+B pipeline expects a model directory and a tokenizer directory. These may be Hugging Face downloads or Google Drive paths.
+
+## 3. Run A
+
+```bash
+bash scripts/run_a_infer.sh \
+  reviewer_inputs/a_input.csv \
+  outputs/a_run \
+  checkpoints/a_best \
+  /path/to/expredict.xlsx
+```
+
+## 4. Run B
+
+```bash
+bash scripts/run_b_infer.sh \
+  reviewer_inputs/b_input.csv \
+  outputs/b_run \
+  /path/to/b_model \
+  /path/to/b_tokenizer \
+  /path/to/expredict.xlsx
+```
+
+## 5. Inspect Results
+
+Reviewer-facing output:
+
+```text
+outputs/a_run/predictions.csv
+outputs/b_run/predictions.csv
+```
+
+Debugging output:
+
+```text
+predictions.jsonl
+debug_detection.jsonl
+summary.json
+```

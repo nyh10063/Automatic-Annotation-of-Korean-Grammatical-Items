@@ -22,6 +22,19 @@ from kmwe.utils.morph import analyze_with_kiwi
 B_DEBUG_EIDS = {"ece002", "ece003", "edf004", "edf005", "ept001", "ept002", "ept003"}
 
 
+REVIEWER_LABELS = {
+    "ece001": "다면(가정/조건 제시)",
+    "edf003": "ㄴ/은 적 있/없(경험 유무 서술)",
+    "ece002": "ㄴ/은/는데1(상황/배경 제시)",
+    "ece003": "ㄴ/은/는데2(대립/대조)",
+    "edf004": "고 말1(안타까움)",
+    "edf005": "고 말2(의지)",
+    "ept001": "까지1(범위의 끝)",
+    "ept002": "까지2(더함)",
+    "ept003": "까지3(지나침)",
+}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Public B-pipeline LLM runner")
     parser.add_argument("--input_csv", required=True, type=Path)
@@ -347,8 +360,9 @@ def _generate_one(*, model: Any, tokenizer: Any, messages: list[dict[str, Any]],
 def _forms_for_eids(eids: list[str], expredict_map: dict[str, dict[str, Any]]) -> list[str]:
     forms: list[str] = []
     for eid in eids or []:
-        meta = expredict_map.get(str(eid), {}) if isinstance(expredict_map, dict) else {}
-        form = str(meta.get("canonical_form") or meta.get("대표형") or eid).strip()
+        eid_str = str(eid).strip()
+        meta = expredict_map.get(eid_str, {}) if isinstance(expredict_map, dict) else {}
+        form = str(REVIEWER_LABELS.get(eid_str) or meta.get("canonical_form") or meta.get("대표형") or eid_str).strip()
         if form and form not in forms:
             forms.append(form)
     return forms
