@@ -1,0 +1,551 @@
+exp:
+  exp_id: default
+  description: kmwe central default config
+  tags:
+  - kmwe
+paths:
+  project_root: __AUTO__
+  dict_xlsx: data/dict/expredict.xlsx
+  infer_input_csv: data/infer/input.csv
+  data_dir: data
+  artifacts_dir: artifacts
+  force_ingest_corpus_jsonl: null
+  gold_xlsx: data/gold/gold.xlsx
+  gold_b_xlsx: data/gold/gold_b.xlsx
+  logs_dir: logs
+  cache_dir: cache
+  tmp_dir: tmp
+wandb:
+  enabled: true
+  mode: online
+  project: kmwe_tapt
+  entity: null
+  tags:
+  - kmwe
+  run_name_template: '{stage}_{encoder}_{exp_id}'
+  group: null
+  notes: null
+runtime:
+  seed: 42
+  device: auto
+  num_workers: 4
+  deterministic: false
+  mixed_precision: auto
+  grad_accum_steps: 1
+  max_steps: null
+gold:
+  neg_confusable_requires_span: false
+text_policy:
+  spacing_policy_default: st
+  normalization:
+    enabled: true
+    apply_scope:
+    - detect_only
+    collapse_whitespace: true
+    strip_some_punct: false
+ingest:
+  enabled: true
+  one_time_normalization:
+    normalize_newlines: true     # \r\n -> \n
+    remove_bom: true
+    unicode_nfc: true
+  source_name: "unknown"
+  ignore_user_ids: false
+  shard_format: jsonl            # or parquet
+  shard_size: 50000
+  train_corpora:
+    enabled: false
+    base_dir: data/train_corpora
+    corpora:
+    - name: dependency
+      purpose: tapt
+      input_path: data/train_corpora/dependency/text.jsonl
+      format: jsonl
+      text_field: text
+      uid_field: uid
+      source_name: dependency
+    - name: morph
+      purpose: tapt
+      input_path: data/train_corpora/morph/text.jsonl
+      format: jsonl
+      text_field: text
+      uid_field: uid
+      source_name: morph
+    - name: semantic_text
+      purpose: tapt
+      input_path: data/train_corpora/semantic_text/text.jsonl
+      format: jsonl
+      text_field: text
+      uid_field: uid
+      source_name: semantic_text
+    - name: learner_5_6
+      purpose: tapt
+      input_path: data/train_corpora/learner_5_6/text.jsonl
+      format: jsonl
+      text_field: text
+      uid_field: uid
+      source_name: learner_5_6
+dict:
+  sheet_names:
+    expredict: expredict
+    components: components
+    rules: rules
+    llm_examples: llm_examples
+  # sheet2(components) optional:
+  # - allowed_sense / disallowed_sense support multi values separated by ';' (e.g., "003;007")
+  # - applied only when corpus/input provides token-level sense (e.g., semantic corpus); otherwise skipped.
+  validation:
+    enabled: true
+    fail_on_error: true
+    write_report: true
+    report_version: 1
+    include_suggested_fix: true
+    include_by_issue_code: true
+    severity_levels: ["ERROR", "WARNING", "INFO"]
+    llm_examples:
+      span_text_mismatch_severity: "WARNING"
+tapt:
+  enabled: true
+  masking: dynamic
+  use_wwm: false
+  index_path: null
+  encoder:
+    name: deberta_korean_v3
+    tapt_mode: rtd
+    use_fast: null
+  optimizer: adamw
+  lr: 5.0e-05
+  batch_size: 32
+  epochs: null
+  max_steps: 10000
+  save_every_n_steps: 500
+  report_hf_warnings: true
+  data_mix:
+    dependency: 1.5
+    morph: 1.5
+    semantic_text: 1.0
+    learner_5_6: 0.0
+  learner_curriculum:
+    enabled: false
+    stage1:
+      description: clean adaptation
+    stage2:
+      steps_ratio: 0.15
+      learner_mix_ratio: 0.15
+mtl:
+  enabled: true
+  training_mode: legacy_round_robin
+  max_steps: 2
+  batch_size: 2
+  grad_accum_steps: 1
+  simultaneous:
+    enabled: false
+    task_plan: [sense, structural, sense, pos_morph, structural]
+    task_sampling_ratio:
+      sense: 2
+      structural: 2
+      pos_morph: 1
+    target_semantic_epochs: 3
+    reshuffle_on_wrap: true
+    stop_on: semantic_epochs
+  debug_predictions:
+    enabled: false
+    every_steps: 50
+    topk: 10
+    max_examples_per_task: 1
+  shared_encoder:
+    name: deberta_korean_v3
+  structural:
+    enabled: true
+    head: biaffine
+    loss_weight: 1.0
+    loss_weight_head: 1.0
+    loss_weight_label: 1.0
+    dev_ratio: 0.02
+  sense:
+    enabled: true
+    loss_weight: 1.0
+    dev_ratio: 0.02
+  pos_morph:
+    enabled: true
+    corpora: null
+    loss_weight: 1.0
+    dev_ratio: 0.02
+    learner_mix_enabled: false
+    learner_mix_ratio: 0.0
+    error_head_enabled: false
+    loss_control: null
+    curriculum:
+      enabled: false
+      stage2_mix_ratio: 0.15
+#학습자 말뭉치 사용을 위한 안배임
+#Stage 1: 정상문 말뭉치(의존/형태/의미/우리말샘)로 적응
+#Stage 2: 전체 스텝의 일부(예: 15%) 구간에서 **학습자 말뭉치(오류 포함)**를 일정 비율로 혼합
+#기본값에서는 enabled: false로 꺼져 있으며, 실험군(exp)에서만 켜는 것이 재현성에 유리
+
+rules:
+  # Safety: if required inputs are missing (e.g., morph_tokens), do not raise.
+  # Instead: skip the rule and write RULE_SKIPPED log with reason.
+  missing_input_policy: skip_and_log   # {skip_and_log} (reserved for future enums)
+  skip_log_event_name: RULE_SKIPPED
+
+silver:
+  enabled: true
+  morph:
+    enabled: true
+    analyzer: kiwi
+    kiwi_model: cong-global
+    window_chars: 20
+    pos_mapping: auto
+    dump_tokens: false
+    dump_max_tokens_per_sentence: 200
+    dump_max_sentences: 200
+  sources:
+  - korean_basic_dict_examples
+  - dependency
+  - semantic
+  - morph
+  write_candidate_log: true
+  write_rule_hit_log: true
+  # sheet3.rules.scope 필터링: build_silver(TRAIN)에서는 scope ∈ {all, train}만 적용(infer는 무시).
+  disconti_capture: true
+  crf_mode: 'off'
+  # detect: regex 매치 범위/폭주 방지 설정
+  # Guard A: 특수 후보 탐색은 detect window 내부로 제한(과잉 매칭 방지)
+  detect_match_window_chars: 12
+  detect_max_matches_per_rule: 50
+  triage_thresholds:
+      # Gold=~35/e_id 가정: confirm은 더 보수적으로(precision), hold는 폭넓게(recall)
+    confirm_min_score: 4
+    hold_min_score: 1
+    discard_below: 0
+  merge:
+    enabled: true
+    key_strategy: sha1_sentence_uid_segments
+    prefer_order: [confirm, hold, discard]
+    on_confirm_conflict: demote_to_hold
+    write_conflict_log: true
+    conflict_log_name: silver_conflicts.jsonl
+build_silver:
+  for_users:
+    enabled: true
+    out_path: for_users/build_silver_latest.csv
+    columns_version: v1
+build_bgroup_sft:
+  enabled: true
+  gold_sheet_name: gold
+  allow_multiple: false
+  wandb: {}
+llm_sft:
+  enabled: true
+  backend: hf
+  input_dir: null
+  train_jsonl: null
+  dev_jsonl: null
+  test_jsonl: null
+  model_name_or_path: null
+  max_seq_len: 2048
+  batch_size: 1
+  grad_accum_steps: 1
+  lr: 2.0e-05
+  epochs: 1
+  eval_every_steps: 50
+  save_every_steps: 200
+  log_every_steps: 10
+  shuffle: true
+  gradient_checkpointing: false
+  report_hf_warnings: true
+  allow_multiple: false
+  log_probe_predictions: true
+  probe_every_steps: 20
+  gen_cfg:
+    max_input_len: 2048
+    max_new_tokens: 16
+    do_sample: false
+    temperature: 1.0
+    top_p: 1.0
+  openai:
+    api_key_env: OPENAI_API_KEY
+    suffix: null
+  wandb: {}
+eval_hf_sft:
+  enabled: true
+  input_dir: null
+  dev_jsonl: null
+  test_jsonl: null
+  model_name_or_path: null
+  allow_multiple: false
+  use_bf16: true
+  attn_implementation: ""
+  gen_cfg:
+    max_input_len: 2048
+    max_new_tokens: 16
+    do_sample: false
+    temperature: 1.0
+    top_p: 1.0
+
+eval_openai_sft:
+  enabled: true
+  input_dir: null
+  dev_jsonl: null
+  test_jsonl: null
+  model_name_or_path: null
+  allow_multiple: false
+  max_output_tokens: 16
+  openai:
+    api_key_env: OPENAI_API_KEY
+weak:
+  enabled: true
+  silver_path: null
+  encoder: null
+  max_steps: 100
+  batch_size: 2
+  grad_accum_steps: 1
+  max_seq_len: 256
+  lr: 5.0e-05
+  report_hf_warnings: true
+  tokenizer_use_fast: auto
+  input_split: confirm_hold
+  sample_ratio: 1.0
+  loss_weight: 0.7
+  init_from: mtl
+
+finetune:
+  enabled: true
+  encoder: deberta_korean_v3
+  task: candidate_span_binary
+  max_seq_len: 256
+  batch_size: 16
+  lr: 2.0e-05
+  epochs: 3
+  max_steps: 1000
+  shuffle: true
+  debug_predictions:
+    enabled: false
+    every_steps: 50
+    max_examples_per_step: 2
+    log_to_wandb: true
+  focal_loss:
+    gamma: 2.0
+    alpha: 0.25
+infer:
+  enabled: true
+  input_jsonl: null
+  include_morph_tokens: false
+  report_topn_eid: 20
+  rerank:
+    enabled: false
+  input:
+    format: csv_sentence
+    csv:
+      encoding: utf-8
+      delimiter: ","
+      has_header: true
+      doc_id_col: doc_id
+      sent_index_col: sent_index
+      target_sentence_col: target_sentence
+      source_col: source
+      row_id_col: ""              # 비어있으면 row_id_policy로 생성
+      row_id_policy: doc_id:sent_index
+      meta_cols: []               # [] => 나머지 전체 컬럼을 meta로 수집
+      drop_empty_sentence: true
+      sent_index_base: 0
+  bundle:
+    write: true
+    format: jsonl
+    include_locked_spans: true
+  # 기본은 타겟 문장만으로 동작 보장. 문맥이 존재할 때만 1로 성능 보너스.
+  context_window: 0
+  topk: 20  
+  group_a_rule_only: true
+  group_b_use_model: true
+  group_a_require_head_logits: true
+  group_a_disable_fallback_scoring: true
+  # sheet3.rules.scope 필터링: infer_step1(INFER)에서는 scope ∈ {all, infer}만 적용(train는 무시).
+  lock_group_a_spans: true
+# --------------------------------------------
+# Morph / POS normalization (Kiwi → kmwe_stdpos_v1)
+# --------------------------------------------
+# - Kiwi pos_raw → pos_std 변환은 전담 모듈(pos_mapping)에서만 수행
+# - 표준 POS 스펙은 docs/CONFIG.md 8.13.6 (kmwe_stdpos_v1) 단일 출처를 따른다
+  morph:
+    analyzer: kiwi
+    kiwi_profile: cong-global
+    # detect 단계: 표면형 anchor + (선택) lemma backoff로 후보 추가(lemma로 폐기 금지)
+    lemma_backoff:
+      enabled: true
+      discard_by_lemma: false
+    # POS 매핑은 B그룹 verify/context에만 적용(오분석 전파 최소화)
+    pos_mapping:
+      module: kmwe.morph.pos_mapping
+      scheme: kmwe_stdpos_v1
+      # 적용 스코프: B그룹 verify/context에서 pos_std가 필요할 때 사용
+      apply_scope: group_b_verify_context
+      log:
+        namespace: pos_mapping
+        unmapped_tag_counts_key: pos_mapping/unmapped_tag_counts
+        unmapped_tag_examples_key: pos_mapping/unmapped_tag_examples
+        topk_unmapped_tags: 30
+        max_examples_per_tag: 3
+    finalize_spans_on_raw: true
+
+  uncertainty:
+    # margin/ambiguous 계산 정책(최소 정의)
+    margin_policy: span_polyset_top1_vs_top2
+    margin_threshold: 0.10
+    low_conf_threshold: 0.55
+    use_sigmoid_prob: true
+    temperature: 1.0
+    # top2가 없으면: margin=1.0(확실)로 두고, ambiguous는 low_conf_threshold로만 판단한다.
+  group_a_accept_threshold: 0.55
+  output:
+    write_dropped_candidates: true
+  candidate_scoring:
+    enabled: true
+    mode: candidate_first_span_binary
+  postprocess:
+    enabled: true
+    overlap_cleanup: nms
+    # NMS는 “중복/동일가설 제거” 용도로만 강하게 적용한다.
+    # 기본 정책: 동일 e_id 또는 동일 polyset_id 내부에서만 NMS 강제 제거
+    nms:
+      scope: same_eid_or_polyset          # {same_eid_or_polyset, same_eid_only, polyset_only, global}
+      metric: char_iou                   # 불연속 span_segments 포함, char-coverage IoU
+      iou_threshold: 0.60
+      short_span_len_le: 4               # 짧은 스팬은 IoU가 불안정하므로 보조 기준 사용
+      short_span_min_overlap_ratio: 0.90 # overlap/min_len
+      tie_breaker: score_then_longer_then_span_key
+    polyset_competition: true
+    ambiguous_only_polyset_topk: true
+    polyset_topk_when_ambiguous: 3       # ambiguous=true인 (span_key, polyset_id) 경쟁군에서 top-k 유지
+infer_step2_rerank:
+  output:
+    write_prompt_metadata: true
+llm_rerank:
+  enabled: true
+  persona: expert_linguist
+  model: gpt-4.1-mini
+  temperature: 0.0
+  max_tokens: 900
+  prompt:
+    template_version: v2_transduction_decision_line
+    forbid_json_output: true
+    include_examples: false
+    max_candidates: 20
+    examples:
+      role_order: [pos, dispos, neg, conf]
+      max_examples_per_candidate: 6
+      max_per_role:
+        pos: 2
+        dispos: 2
+        neg: 1
+        conf: 2
+      render_empty_slots: true
+  include_fields:
+  - e_id
+  - score
+  - triage
+  - hard_fail_triggered
+  - hard_fail_reason
+  - candidate_window
+  - span_segments
+  - encoder_rank
+  - margin
+  - ambiguous
+  - gloss
+  - pragmatics
+  - disambiguation_hint
+  - raw_sentence
+  - llm_marked_text
+  transduction:
+    minimal_marking: true
+    output_format: decision_line
+    protocol: decision_line_v1
+    decision_prefix: 'DECISION:'
+    allow_multiple: false
+  parsing:
+    mode: lenient
+    require_candidate_match: true
+    on_parse_error: fallback
+    on_oob_offset: issue_and_discard
+  fallback:
+    strategy: accept_best_confirm_else_none
+
+# LLM failure policy:
+# - http_401 > 0 or responses_rows == 0
+#   → fatal_call_llm_error = true
+#   → do not write llm_responses.jsonl
+
+eval:
+  enabled: true
+  pred_path: null
+  pred_schema: null
+  pred_stage_preference: "infer_step1,build_silver"
+  pred_jsonl: null
+  include_hold: false
+  views:
+    strict:
+      include_hold: false
+    lenient:
+      include_hold: true
+  report_views: ["strict", "lenient"]
+  primary_view: "strict"
+  span_scope_policy: gold_only
+  match_key_policy: example_id_instance_or_sentence
+  target_only: true
+  only_keys_in_gold: true
+  report_topn_eid: 20
+  error_samples_max: 100
+  write_errors: true
+  prefer_stage: build_silver
+  fail_on_joined_zero: true
+  min_gold_rows: 200
+  allow_stale_pred: false
+  export_for_users: true
+  export_for_users_path: for_users/eval_latest.csv
+  export_for_users_include_ignored: true
+  export_for_users_write_rows_jsonl: true
+  export_for_users_write_readme: true
+  export_for_users_max_json_cell_chars: 5000
+  metrics:
+  - precision
+  - recall
+  - f1
+  report_dir: reports
+  error_analysis: true
+logging:
+  level: INFO
+  save_candidate_spans: true
+  save_rule_hits: true
+  save_intermediate: true
+
+
+bgroup_encoder_ce:
+  enabled: false
+  encoder: null
+  tokenizer: null
+  gold_sheet_name: gold
+  allow_multiple: false
+  batch_size: 4
+  max_seq_len: 256
+  lr: 2.0e-5
+  epochs: 8
+  max_steps: 20000
+  shuffle: true
+  freeze_encoder: false
+  progress_log_every_steps: 20
+  dev_eval:
+    enabled: true
+    every_epochs: 1
+  test_eval:
+    enabled: true
+    source: best
+  early_stop:
+    enabled: true
+    metric: dev_f1
+    direction: max
+    patience: 3
+  debug_predictions:
+    enabled: true
+    every_steps: 50
+    max_examples_per_step: 1

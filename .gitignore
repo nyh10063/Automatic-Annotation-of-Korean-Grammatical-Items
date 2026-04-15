@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+outputs/*
+!outputs/.gitkeep
+checkpoints/*
+!checkpoints/README.md

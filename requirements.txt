@@ -1,0 +1,8 @@
+# Minimal public dependencies
+pandas
+openpyxl
+pyyaml
+tqdm
+numpy
+torch
+transformers
