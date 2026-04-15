@@ -331,26 +331,39 @@ def _forms_for_eids(eids: list[str], expredict_map: dict[str, dict[str, Any]]) -
     return forms
 
 
+def _glosses_for_eids(eids: list[str], expredict_map: dict[str, dict[str, Any]]) -> list[str]:
+    glosses: list[str] = []
+    for eid in eids or []:
+        meta = expredict_map.get(str(eid), {}) if isinstance(expredict_map, dict) else {}
+        gloss = str(meta.get("gloss") or meta.get("뜻풀이") or "").strip()
+        if gloss and gloss not in glosses:
+            glosses.append(gloss)
+    return glosses
+
+
 def _write_csv(path: Path, rows: list[dict[str, Any]], expredict_map: dict[str, dict[str, Any]]) -> None:
-    # Reviewer-facing CSV: keep identifiers and raw outputs in JSONL, but show forms here.
+    # Reviewer-facing CSV: column names stay familiar, values use canonical forms.
     fieldnames = [
         "id",
         "sentence",
-        "predicted_forms",
         "target_span_text",
-        "candidate_forms",
+        "candidate_e_ids",
+        "pred_e_ids",
+        "pred_glosses",
     ]
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
+            pred_eids = row.get("pred_e_ids", []) or []
             writer.writerow(
                 {
                     "id": row.get("id", ""),
                     "sentence": row.get("sentence", ""),
-                    "predicted_forms": ";".join(_forms_for_eids(row.get("pred_e_ids", []), expredict_map)),
                     "target_span_text": row.get("target_span_text", ""),
-                    "candidate_forms": ";".join(_forms_for_eids(row.get("candidate_e_ids", []), expredict_map)),
+                    "candidate_e_ids": ";".join(_forms_for_eids(row.get("candidate_e_ids", []) or [], expredict_map)),
+                    "pred_e_ids": ";".join(_forms_for_eids(pred_eids, expredict_map)),
+                    "pred_glosses": ";".join(_glosses_for_eids(pred_eids, expredict_map)),
                 }
             )
 

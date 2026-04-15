@@ -387,23 +387,48 @@ def _prediction_spans(row: dict[str, Any]) -> list[str]:
     return spans
 
 
-def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    # Reviewer-facing CSV: keep only stable, easy-to-read prediction fields.
+def _forms_for_eids(eids: list[str], expredict_map: dict[str, dict[str, Any]]) -> list[str]:
+    forms: list[str] = []
+    for eid in eids or []:
+        meta = expredict_map.get(str(eid), {}) if isinstance(expredict_map, dict) else {}
+        form = str(meta.get("canonical_form") or meta.get("대표형") or eid).strip()
+        if form and form not in forms:
+            forms.append(form)
+    return forms
+
+
+def _glosses_for_eids(eids: list[str], expredict_map: dict[str, dict[str, Any]]) -> list[str]:
+    glosses: list[str] = []
+    for eid in eids or []:
+        meta = expredict_map.get(str(eid), {}) if isinstance(expredict_map, dict) else {}
+        gloss = str(meta.get("gloss") or meta.get("뜻풀이") or "").strip()
+        if gloss and gloss not in glosses:
+            glosses.append(gloss)
+    return glosses
+
+
+def _write_csv(path: Path, rows: list[dict[str, Any]], expredict_map: dict[str, dict[str, Any]]) -> None:
+    # Reviewer-facing CSV: column names stay familiar, values use canonical forms.
     fieldnames = [
         "id",
         "sentence",
-        "predicted_forms",
+        "candidate_e_ids",
+        "pred_e_ids",
+        "pred_glosses",
         "predicted_spans",
     ]
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
+            pred_eids = row.get("pred_e_ids", []) or []
             writer.writerow(
                 {
                     "id": row.get("id", ""),
                     "sentence": row.get("sentence", ""),
-                    "predicted_forms": ";".join(_prediction_forms(row)),
+                    "candidate_e_ids": ";".join(_forms_for_eids(row.get("candidate_e_ids", []) or [], expredict_map)),
+                    "pred_e_ids": ";".join(_forms_for_eids(pred_eids, expredict_map)),
+                    "pred_glosses": ";".join(_glosses_for_eids(pred_eids, expredict_map)),
                     "predicted_spans": ";".join(_prediction_spans(row)),
                 }
             )
@@ -547,7 +572,7 @@ def main() -> None:
             'after_group_filter_candidates': debug['after_group_filter_candidates'],
         })
 
-    _write_csv(args.output_dir / 'predictions.csv', pred_rows)
+    _write_csv(args.output_dir / 'predictions.csv', pred_rows, dict(runtime.get('expredict_map') or {}))
     _write_jsonl(args.output_dir / 'predictions.jsonl', pred_rows)
     _write_summary(args.output_dir / 'summary.json', pred_rows, args)
     _write_debug_detection(args.output_dir / 'debug_detection.jsonl', pred_rows)
