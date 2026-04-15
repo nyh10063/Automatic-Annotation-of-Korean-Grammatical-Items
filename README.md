@@ -103,6 +103,34 @@ bash scripts/run_b_infer.sh \
   /path/to/expredict.xlsx
 ```
 
+## 선택 실행: GPT-4.1 사용
+
+기본 B 파이프라인은 공개된 Qwen 기반 체크포인트를 사용합니다.
+
+추가로, OpenAI API key가 있는 경우에는 GPT-4.1 또는 fine-tuned GPT-4.1 모델로도 같은 입력 파일을 실행해 볼 수 있습니다. 이 기능은 선택 사항입니다.
+
+GPT-4.1 실행은 모델 파일을 내려받지 않고 OpenAI API를 호출합니다. 따라서 사용자의 `OPENAI_API_KEY`가 필요하며, API 사용 비용이 발생할 수 있습니다. API key는 절대 GitHub에 올리면 안 됩니다.
+
+입력 CSV 형식과 출력 CSV 형식은 Qwen B 파이프라인과 같습니다.
+
+```bash
+export OPENAI_API_KEY="your_api_key"
+export OPENAI_MODEL="gpt-4.1"
+
+bash scripts/run_b_openai_infer.sh \
+  reviewer_inputs/b_input.csv \
+  outputs/b_openai_run \
+  /path/to/expredict.xlsx
+```
+
+만약 fine-tuned GPT-4.1 모델을 사용하려면 `OPENAI_MODEL`에 해당 fine-tuned model id를 넣으면 됩니다.
+
+```bash
+export OPENAI_MODEL="ft:your_fine_tuned_model_id"
+```
+
+논문 공개용 기본 재현 경로는 Qwen 기반 runner입니다. GPT-4.1 runner는 같은 규칙 탐지와 같은 프롬프트를 OpenAI API로 실행해 보는 선택 기능입니다.
+
 실행 후에는 아래 파일을 확인하면 됩니다.
 
 ```text
