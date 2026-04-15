@@ -347,18 +347,54 @@ def _run_a_downstream(
     return pred_eids, raw_output, None, scored
 
 
+def _candidate_span_text(sentence: str, span_key: list[list[int]] | None) -> str:
+    pieces: list[str] = []
+    for span in span_key or []:
+        if not isinstance(span, list) or len(span) < 2:
+            continue
+        try:
+            start, end = int(span[0]), int(span[1])
+        except (TypeError, ValueError):
+            continue
+        if 0 <= start < end <= len(sentence):
+            pieces.append(sentence[start:end])
+    return " ".join(pieces)
+
+
+def _prediction_forms(row: dict[str, Any]) -> list[str]:
+    forms: list[str] = []
+    pred_eids = set(row.get("pred_e_ids") or [])
+    for item in row.get("selected_by_span") or []:
+        eid = str(item.get("e_id") or "").strip()
+        if eid in pred_eids:
+            text_b = str(item.get("downstream_input_text_b") or "")
+            form = text_b.splitlines()[0].strip() if text_b else eid
+            if form and form not in forms:
+                forms.append(form)
+    return forms
+
+
+def _prediction_spans(row: dict[str, Any]) -> list[str]:
+    spans: list[str] = []
+    sentence = str(row.get("sentence") or "")
+    pred_eids = set(row.get("pred_e_ids") or [])
+    for item in row.get("selected_by_span") or []:
+        eid = str(item.get("e_id") or "").strip()
+        if eid in pred_eids:
+            span_text = _candidate_span_text(sentence, item.get("span_key"))
+            if span_text and span_text not in spans:
+                spans.append(span_text)
+    return spans
+
+
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    # Reviewer-facing CSV: keep only stable, easy-to-read prediction fields.
     fieldnames = [
         "id",
         "sentence",
-        "status",
-        "candidate_e_ids",
-        "pred_e_id",
-        "pred_e_ids",
-        "top1_e_id",
-        "top1_confidence",
-        "threshold",
-        "error",
+        "predicted_e_ids",
+        "predicted_forms",
+        "predicted_spans",
     ]
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -368,14 +404,9 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
                 {
                     "id": row.get("id", ""),
                     "sentence": row.get("sentence", ""),
-                    "status": row.get("status", ""),
-                    "candidate_e_ids": "|".join(row.get("candidate_e_ids", [])),
-                    "pred_e_id": row.get("pred_e_id", "") or "",
-                    "pred_e_ids": "|".join(row.get("pred_e_ids", []) or []),
-                    "top1_e_id": row.get("top1_e_id", "") or "",
-                    "top1_confidence": row.get("top1_confidence", ""),
-                    "threshold": row.get("threshold", ""),
-                    "error": row.get("error", "") or "",
+                    "predicted_e_ids": ";".join(row.get("pred_e_ids", []) or []),
+                    "predicted_forms": ";".join(_prediction_forms(row)),
+                    "predicted_spans": ";".join(_prediction_spans(row)),
                 }
             )
 
