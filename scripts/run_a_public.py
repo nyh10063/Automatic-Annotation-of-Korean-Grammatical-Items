@@ -38,18 +38,36 @@ def _read_input_csv(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames or []
-        if "id" not in fieldnames or "sentence" not in fieldnames:
-            raise ValueError(f"input csv must contain 'id' and 'sentence': {path}")
+        if "sentence" not in fieldnames:
+            raise ValueError(f"input csv must contain a 'sentence' column: {path}")
         for row in reader:
-            rid = str(row.get("id", "")).strip()
-            sentence_parts = [str(row.get("sentence", "")).strip()]
+            sentence_parts: list[str] = []
+            first_cell = str(row.get(fieldnames[0], "")).strip() if fieldnames else ""
+            sentence_cell = str(row.get("sentence", "")).strip()
+
+            # Reviewer input should be sentence-only. For older id,sentence files,
+            # ignore numeric ids but recover non-numeric first cells if a row was
+            # accidentally written without the id column.
+            if fieldnames[0] == "sentence":
+                sentence_parts.append(sentence_cell)
+            elif first_cell and not first_cell.isdigit():
+                sentence_parts.append(first_cell)
+                if sentence_cell:
+                    sentence_parts.append(sentence_cell)
+            else:
+                sentence_parts.append(sentence_cell)
+
             # Be forgiving for reviewer-authored CSVs: if a sentence contains
             # unquoted commas, csv.DictReader stores the extra cells under None.
             extras = row.get(None) or []
-            sentence_parts.extend(str(part).strip() for part in extras if str(part).strip())
-            sentence = ", ".join(part for part in sentence_parts if part)
-            if rid and sentence:
-                rows.append({"id": rid, "sentence": sentence})
+            sentence_parts.extend(
+                str(part).strip()
+                for part in extras
+                if part is not None and str(part).strip() and str(part).strip().lower() != "none"
+            )
+            sentence = ", ".join(part for part in sentence_parts if part and part.lower() != "none")
+            if sentence:
+                rows.append({"id": str(len(rows) + 1), "sentence": sentence})
     if not rows:
         raise ValueError(f"no valid rows found in input csv: {path}")
     return rows
