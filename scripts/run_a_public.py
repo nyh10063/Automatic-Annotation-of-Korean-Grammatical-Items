@@ -42,7 +42,12 @@ def _read_input_csv(path: Path) -> list[dict[str, str]]:
             raise ValueError(f"input csv must contain 'id' and 'sentence': {path}")
         for row in reader:
             rid = str(row.get("id", "")).strip()
-            sentence = str(row.get("sentence", "")).strip()
+            sentence_parts = [str(row.get("sentence", "")).strip()]
+            # Be forgiving for reviewer-authored CSVs: if a sentence contains
+            # unquoted commas, csv.DictReader stores the extra cells under None.
+            extras = row.get(None) or []
+            sentence_parts.extend(str(part).strip() for part in extras if str(part).strip())
+            sentence = ", ".join(part for part in sentence_parts if part)
             if rid and sentence:
                 rows.append({"id": rid, "sentence": sentence})
     if not rows:
