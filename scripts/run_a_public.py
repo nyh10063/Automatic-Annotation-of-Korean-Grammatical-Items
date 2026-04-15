@@ -239,6 +239,18 @@ def _build_scorer(best_dir: Path, output_dir: Path, logger: logging.Logger):
     )
 
 
+def _span_key(candidate: dict[str, Any]) -> tuple[tuple[int, int], ...]:
+    spans = candidate.get("span_segments") or []
+    norm: list[tuple[int, int]] = []
+    for item in spans:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            try:
+                norm.append((int(item[0]), int(item[1])))
+            except (TypeError, ValueError):
+                continue
+    return tuple(norm)
+
+
 def _run_a_downstream(
     *,
     candidates: list[dict[str, Any]],
@@ -248,7 +260,7 @@ def _run_a_downstream(
     threshold: float,
     batch_size: int,
     logger: logging.Logger,
-) -> tuple[str | None, dict[str, Any], str | None, list[dict[str, Any]]]:
+) -> tuple[list[str], dict[str, Any], str | None, list[dict[str, Any]]]:
     scored = [dict(c) for c in candidates]
     _score_candidates_with_encoder(
         candidates=scored,
@@ -281,24 +293,58 @@ def _run_a_downstream(
         reverse=True,
     )
     if not scored:
-        return None, {"top1_confidence": None, "n_candidates": 0}, "no_candidates_after_rule_gate", scored
+        return [], {"top1_confidence": None, "n_candidates": 0, "selected_by_span": []}, "no_candidates_after_rule_gate", scored
+
+    best_by_span: dict[tuple[tuple[int, int], ...], dict[str, Any]] = {}
+    for cand in scored:
+        key = _span_key(cand)
+        if not key:
+            key = ((-1, -1),)
+        if key not in best_by_span:
+            best_by_span[key] = cand
+
+    selected_by_span: list[dict[str, Any]] = []
+    pred_eids: list[str] = []
+    for key, cand in sorted(best_by_span.items(), key=lambda kv: kv[0]):
+        conf = float(cand.get("confidence", 0.0) or 0.0)
+        eid = str(cand.get("e_id") or "").strip()
+        selected = bool(eid and conf >= float(threshold))
+        if selected:
+            pred_eids.append(eid)
+        selected_by_span.append(
+            {
+                "span_key": [[int(s), int(e)] for s, e in key],
+                "e_id": eid or None,
+                "confidence": conf,
+                "threshold": float(threshold),
+                "selected": selected,
+                "encoder_score": cand.get("encoder_score"),
+                "encoder_prob": cand.get("encoder_prob"),
+                "downstream_input_text_a": cand.get("encoder_input_text_a"),
+                "downstream_input_text_b": cand.get("encoder_input_text_b"),
+                "downstream_input_version": cand.get("encoder_input_version") or AGROUP_INPUT_CONSTRUCTION_VERSION_V2,
+                "downstream_input_text_b_format": cand.get("encoder_input_text_b_format"),
+            }
+        )
+
     top1 = scored[0]
     top1_conf = float(top1.get("confidence", 0.0) or 0.0)
-    pred_eid = str(top1.get("e_id") or "").strip() if top1_conf >= float(threshold) else None
     raw_output = {
         "top1_e_id": str(top1.get("e_id") or "").strip() or None,
         "top1_confidence": top1_conf,
         "threshold": float(threshold),
         "n_candidates": len(scored),
         "downstream_candidate_e_ids": [str(c.get("e_id") or "").strip() for c in scored],
+        "selected_by_span": selected_by_span,
+        "pred_e_ids": pred_eids,
         "downstream_input_text_a": top1.get("encoder_input_text_a"),
         "downstream_input_text_b": top1.get("encoder_input_text_b"),
         "downstream_input_version": top1.get("encoder_input_version") or AGROUP_INPUT_CONSTRUCTION_VERSION_V2,
         "downstream_input_text_b_format": top1.get("encoder_input_text_b_format"),
     }
-    if pred_eid is None:
-        return None, raw_output, f"group_a_below_threshold<{threshold:.2f}", scored
-    return pred_eid, raw_output, None, scored
+    if not pred_eids:
+        return [], raw_output, f"all_span_top1_below_threshold<{threshold:.2f}", scored
+    return pred_eids, raw_output, None, scored
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -308,6 +354,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "status",
         "candidate_e_ids",
         "pred_e_id",
+        "pred_e_ids",
         "top1_e_id",
         "top1_confidence",
         "threshold",
@@ -324,6 +371,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
                     "status": row.get("status", ""),
                     "candidate_e_ids": "|".join(row.get("candidate_e_ids", [])),
                     "pred_e_id": row.get("pred_e_id", "") or "",
+                    "pred_e_ids": "|".join(row.get("pred_e_ids", []) or []),
                     "top1_e_id": row.get("top1_e_id", "") or "",
                     "top1_confidence": row.get("top1_confidence", ""),
                     "threshold": row.get("threshold", ""),
@@ -341,7 +389,7 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 def _write_summary(path: Path, rows: list[dict[str, Any]], args: argparse.Namespace) -> None:
     summary = {
         "n_rows": len(rows),
-        "n_predicted": sum(1 for r in rows if r.get("pred_e_id")),
+        "n_predicted": sum(1 for r in rows if r.get("pred_e_ids") or r.get("pred_e_id")),
         "n_no_candidate": sum(1 for r in rows if r.get("status") == "no_candidate"),
         "n_below_threshold": sum(1 for r in rows if r.get("status") == "below_threshold"),
         "input_csv": str(args.input_csv),
@@ -354,6 +402,7 @@ def _write_summary(path: Path, rows: list[dict[str, Any]], args: argparse.Namesp
             "candidate_stage": "detect",
             "hard_drop_only": True,
             "group_filter": sorted(A_DEBUG_EIDS),
+            "final_selection_policy": "span_top1_multi_label_per_sentence",
             "encoder_input_source": "infer_step1._score_candidates_with_encoder",
             "encoder_input_version": AGROUP_INPUT_CONSTRUCTION_VERSION_V2,
         },
@@ -368,6 +417,8 @@ def _write_input_preview(path: Path, row: dict[str, Any]) -> None:
         "candidate_e_ids": row.get("candidate_e_ids", []),
         "top1_e_id": row.get("top1_e_id", None),
         "top1_confidence": row.get("top1_confidence", None),
+        "pred_e_ids": row.get("pred_e_ids", []),
+        "selected_by_span": row.get("selected_by_span", []),
         "downstream_input_text_a": row.get("downstream_input_text_a", None),
         "downstream_input_text_b": row.get("downstream_input_text_b", None),
         "downstream_input_version": row.get("downstream_input_version", None),
@@ -423,6 +474,7 @@ def main() -> None:
                 'status': 'no_candidate',
                 'candidate_e_ids': [],
                 'pred_e_id': None,
+                'pred_e_ids': [],
                 'top1_e_id': None,
                 'top1_confidence': None,
                 'threshold': float(args.threshold),
@@ -434,7 +486,7 @@ def main() -> None:
             })
             continue
 
-        pred_eid, raw_output, err, scored = _run_a_downstream(
+        pred_eids, raw_output, err, scored = _run_a_downstream(
             candidates=candidates,
             sentence=sentence,
             runtime=runtime,
@@ -443,17 +495,19 @@ def main() -> None:
             batch_size=int(args.batch_size),
             logger=logger,
         )
-        status = 'ok' if pred_eid else ('below_threshold' if err and err.startswith('group_a_below_threshold') else 'error')
+        status = 'ok' if pred_eids else ('below_threshold' if err and err.startswith('all_span_top1_below_threshold') else 'error')
         pred_rows.append({
             'id': rid,
             'sentence': sentence,
             'status': status,
             'candidate_e_ids': [str(c.get('e_id') or '').strip() for c in scored],
-            'pred_e_id': pred_eid,
+            'pred_e_id': pred_eids[0] if pred_eids else None,
+            'pred_e_ids': pred_eids,
             'top1_e_id': raw_output.get('top1_e_id'),
             'top1_confidence': raw_output.get('top1_confidence'),
             'threshold': raw_output.get('threshold'),
             'error': err,
+            'selected_by_span': raw_output.get('selected_by_span', []),
             'downstream_input_text_a': raw_output.get('downstream_input_text_a'),
             'downstream_input_text_b': raw_output.get('downstream_input_text_b'),
             'downstream_input_version': raw_output.get('downstream_input_version'),
