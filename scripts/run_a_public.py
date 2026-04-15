@@ -392,7 +392,6 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     fieldnames = [
         "id",
         "sentence",
-        "predicted_e_ids",
         "predicted_forms",
         "predicted_spans",
     ]
@@ -404,7 +403,6 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
                 {
                     "id": row.get("id", ""),
                     "sentence": row.get("sentence", ""),
-                    "predicted_e_ids": ";".join(row.get("pred_e_ids", []) or []),
                     "predicted_forms": ";".join(_prediction_forms(row)),
                     "predicted_spans": ";".join(_prediction_spans(row)),
                 }

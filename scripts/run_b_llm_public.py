@@ -321,17 +321,24 @@ def _generate_one(*, model: Any, tokenizer: Any, messages: list[dict[str, Any]],
     return tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
 
-def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+def _forms_for_eids(eids: list[str], expredict_map: dict[str, dict[str, Any]]) -> list[str]:
+    forms: list[str] = []
+    for eid in eids or []:
+        meta = expredict_map.get(str(eid), {}) if isinstance(expredict_map, dict) else {}
+        form = str(meta.get("canonical_form") or meta.get("대표형") or eid).strip()
+        if form and form not in forms:
+            forms.append(form)
+    return forms
+
+
+def _write_csv(path: Path, rows: list[dict[str, Any]], expredict_map: dict[str, dict[str, Any]]) -> None:
+    # Reviewer-facing CSV: keep identifiers and raw outputs in JSONL, but show forms here.
     fieldnames = [
         "id",
         "sentence",
-        "status",
+        "predicted_forms",
         "target_span_text",
-        "candidate_e_ids",
-        "pred_e_ids",
-        "decision_line",
-        "raw_output",
-        "error_type",
+        "candidate_forms",
     ]
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -341,13 +348,9 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
                 {
                     "id": row.get("id", ""),
                     "sentence": row.get("sentence", ""),
-                    "status": row.get("status", ""),
+                    "predicted_forms": ";".join(_forms_for_eids(row.get("pred_e_ids", []), expredict_map)),
                     "target_span_text": row.get("target_span_text", ""),
-                    "candidate_e_ids": "|".join(row.get("candidate_e_ids", [])),
-                    "pred_e_ids": "|".join(row.get("pred_e_ids", [])),
-                    "decision_line": row.get("decision_line", ""),
-                    "raw_output": row.get("raw_output", ""),
-                    "error_type": row.get("error_type", "") or "",
+                    "candidate_forms": ";".join(_forms_for_eids(row.get("candidate_e_ids", []), expredict_map)),
                 }
             )
 
@@ -485,7 +488,7 @@ def main() -> None:
             }
         )
 
-    _write_csv(args.output_dir / "predictions.csv", pred_rows)
+    _write_csv(args.output_dir / "predictions.csv", pred_rows, expredict_map)
     _write_jsonl(args.output_dir / "predictions.jsonl", pred_rows)
     _write_summary(args.output_dir / "summary.json", pred_rows, args)
     _write_debug_detection(args.output_dir / "debug_detection.jsonl", pred_rows)
