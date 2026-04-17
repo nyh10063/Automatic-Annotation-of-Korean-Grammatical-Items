@@ -46,8 +46,21 @@ import os
 from pathlib import Path
 p = Path(os.environ["TOKENIZER_CONFIG"])
 obj = json.loads(p.read_text(encoding="utf-8"))
-if isinstance(obj.get("vocab"), dict):
-    obj.pop("vocab", None)
+changed = False
+for key in ["vocab", "merges"]:
+    if key in obj:
+        obj.pop(key, None)
+        changed = True
+init_inputs = obj.get("init_inputs")
+if isinstance(init_inputs, list) and init_inputs:
+    new_inputs = []
+    for item in init_inputs:
+        if isinstance(item, dict):
+            item = {k: v for k, v in item.items() if k not in {"vocab", "merges"}}
+        new_inputs.append(item)
+    obj["init_inputs"] = new_inputs
+    changed = True
+if changed:
     p.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 INNER
 fi

@@ -1953,7 +1953,11 @@ def _build_encoder_scorer(
         logger.warning("infer_step1 finetune checkpoint 불완전 -> encoder_score=stub")
         return None
 
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir)
+    except Exception as exc:
+        logger.warning("infer_step1 fast tokenizer 로드 실패 -> use_fast=False 재시도: %s", exc)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir, use_fast=False)
     model = AutoModel.from_pretrained(encoder_dir)
     model.to(device)
     head = None
