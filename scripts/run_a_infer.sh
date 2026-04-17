@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Usage:
-#   bash scripts/run_a_infer.sh #     reviewer_inputs/a_input.csv #     outputs/a_run #     /path/to/a_best_dir #     /path/to/expredict.xlsx
+#   bash scripts/run_a_infer.sh #     reviewer_inputs/a_input.csv #     outputs/a_run #     auto|/path/to/a_best_dir #     /path/to/expredict.xlsx
 #
 # Expected A best dir layout:
 #   <A_BEST_DIR>/
@@ -14,17 +14,29 @@ INPUT_CSV="${1:-reviewer_inputs/a_input.csv}"
 OUTPUT_DIR="${2:-outputs/a_run}"
 A_BEST_DIR="${3:-checkpoints/a_best}"
 DICT_XLSX="${4:-data/dict/expredict.xlsx}"
+AUTO_A_REPO_ID="nyh1006/kmwe-a-pipeline-encoder"
+AUTO_A_ROOT="checkpoints/hf_a"
 
 if [[ ! -f "$INPUT_CSV" ]]; then
   echo "[ERROR] input csv not found: $INPUT_CSV" >&2
   exit 1
 fi
-if [[ ! -d "$A_BEST_DIR" ]]; then
-  echo "[ERROR] A best checkpoint dir not found: $A_BEST_DIR" >&2
-  exit 1
-fi
 if [[ ! -f "$DICT_XLSX" ]]; then
   echo "[ERROR] dict xlsx not found: $DICT_XLSX" >&2
+  exit 1
+fi
+
+if [[ "$A_BEST_DIR" == "auto" ]]; then
+  AUTO_A_BEST_DIR="${AUTO_A_ROOT}/a_best"
+  if [[ ! -d "$AUTO_A_BEST_DIR" ]]; then
+    echo "[INFO] downloading A checkpoint from Hugging Face: $AUTO_A_REPO_ID"
+    python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='${AUTO_A_REPO_ID}', local_dir='${AUTO_A_ROOT}')"
+  fi
+  A_BEST_DIR="$AUTO_A_BEST_DIR"
+fi
+
+if [[ ! -d "$A_BEST_DIR" ]]; then
+  echo "[ERROR] A best checkpoint dir not found: $A_BEST_DIR" >&2
   exit 1
 fi
 
