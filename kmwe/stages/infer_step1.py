@@ -1956,7 +1956,7 @@ def _build_encoder_scorer(
     try:
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir)
     except Exception as exc:
-        logger.warning("infer_step1 fast tokenizer 로드 실패 -> tokenizer.json 직접 로드 재시도: %s", exc)
+        logger.info("infer_step1 tokenizer.json 직접 로드 사용")
         from transformers import PreTrainedTokenizerFast
         import json
 
