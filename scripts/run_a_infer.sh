@@ -1,70 +1,54 @@
 #!/usr/bin/env bash
+
 set -euo pipefail
 
-# Usage:
-#   bash scripts/run_a_infer.sh #     reviewer_inputs/a_input.csv #     outputs/a_run #     auto|/path/to/a_best_dir #     /path/to/expredict.xlsx
-#
-# Expected A best dir layout:
-#   <A_BEST_DIR>/
-#     head.pt
-#     encoder/
-#     tokenizer/
+if [ "$#" -lt 4 ]; then
+  echo "Usage: bash scripts/run_a_infer.sh <input_csv> <output_dir> <a_best_dir|auto> <dict_xlsx>" >&2
+  exit 1
+fi
 
-INPUT_CSV="${1:-reviewer_inputs/a_input.csv}"
-OUTPUT_DIR="${2:-outputs/a_run}"
-A_BEST_DIR="${3:-checkpoints/a_best}"
-DICT_XLSX="${4:-data/dict/expredict.xlsx}"
-AUTO_A_REPO_ID="nyh1006/kmwe-a-pipeline-encoder"
-AUTO_A_ROOT="checkpoints/hf_a"
+INPUT_CSV="$1"
+OUTPUT_DIR="$2"
+A_BEST_DIR="$3"
+DICT_XLSX="$4"
 
-if [[ ! -f "$INPUT_CSV" ]]; then
+HF_REPO_ID="nyh1006/kmwe-a-pipeline-encoder"
+AUTO_ROOT="checkpoints/hf_a"
+
+if [ "$A_BEST_DIR" = "auto" ]; then
+  echo "[INFO] downloading A checkpoint from Hugging Face: $HF_REPO_ID"
+  python3 - <<'INNER'
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    repo_id="nyh1006/kmwe-a-pipeline-encoder",
+    local_dir="checkpoints/hf_a",
+)
+INNER
+
+  if [ -d "$AUTO_ROOT/a_best" ]; then
+    A_BEST_DIR="$AUTO_ROOT/a_best"
+  elif [ -d "$AUTO_ROOT/a-best" ]; then
+    A_BEST_DIR="$AUTO_ROOT/a-best"
+  else
+    echo "[ERROR] A best checkpoint dir not found after download under: $AUTO_ROOT" >&2
+    exit 1
+  fi
+fi
+
+if [ ! -f "$INPUT_CSV" ]; then
   echo "[ERROR] input csv not found: $INPUT_CSV" >&2
   exit 1
 fi
-if [[ ! -f "$DICT_XLSX" ]]; then
-  echo "[ERROR] dict xlsx not found: $DICT_XLSX" >&2
-  exit 1
-fi
 
-if [[ "$A_BEST_DIR" == "auto" ]]; then
-  AUTO_A_BEST_DIR="${AUTO_A_ROOT}/a_best"
-  if [[ ! -d "$AUTO_A_BEST_DIR" ]]; then
-    echo "[INFO] downloading A checkpoint from Hugging Face: $AUTO_A_REPO_ID"
-    python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='${AUTO_A_REPO_ID}', local_dir='${AUTO_A_ROOT}')"
-  fi
-  A_BEST_DIR="$AUTO_A_BEST_DIR"
-fi
-
-if [[ ! -d "$A_BEST_DIR" ]]; then
+if [ ! -d "$A_BEST_DIR" ]; then
   echo "[ERROR] A best checkpoint dir not found: $A_BEST_DIR" >&2
   exit 1
 fi
 
-A_ENCODER_DIR="${A_BEST_DIR}/encoder"
-A_TOKENIZER_DIR="${A_BEST_DIR}/tokenizer"
-A_HEAD_PT="${A_BEST_DIR}/head.pt"
-
-if [[ ! -d "$A_ENCODER_DIR" ]]; then
-  echo "[ERROR] encoder dir not found: $A_ENCODER_DIR" >&2
+if [ ! -f "$DICT_XLSX" ]; then
+  echo "[ERROR] dict xlsx not found: $DICT_XLSX" >&2
   exit 1
 fi
-if [[ ! -d "$A_TOKENIZER_DIR" ]]; then
-  echo "[ERROR] tokenizer dir not found: $A_TOKENIZER_DIR" >&2
-  exit 1
-fi
-if [[ ! -f "$A_HEAD_PT" ]]; then
-  echo "[ERROR] head.pt not found: $A_HEAD_PT" >&2
-  exit 1
-fi
-
-mkdir -p "$OUTPUT_DIR"
-
-echo "[INFO] Running A pipeline"
-echo "[INFO] input_csv=$INPUT_CSV"
-echo "[INFO] output_dir=$OUTPUT_DIR"
-echo "[INFO] a_best_dir=$A_BEST_DIR"
-echo "[INFO] dict_xlsx=$DICT_XLSX"
 
 python3 scripts/run_a_public.py   --input_csv "$INPUT_CSV"   --output_dir "$OUTPUT_DIR"   --best_dir "$A_BEST_DIR"   --dict_xlsx "$DICT_XLSX"
-
-echo "[OK] A pipeline finished"
