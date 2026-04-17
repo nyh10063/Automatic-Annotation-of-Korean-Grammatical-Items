@@ -5,3 +5,4 @@ outputs/*
 !outputs/.gitkeep
 checkpoints/*
 !checkpoints/README.md
+.DS_Store
