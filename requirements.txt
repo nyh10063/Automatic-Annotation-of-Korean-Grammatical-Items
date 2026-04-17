@@ -9,3 +9,5 @@ transformers
 accelerate
 openai
 huggingface_hub
+kiwipiepy
+sentencepiece

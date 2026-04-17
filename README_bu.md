@@ -16,6 +16,7 @@
 %cd /content/drive/MyDrive/kmwe
 !git branch --show-current
 !ls
+!pip -q install -r requirements.txt
 ```
 
 그 후에 선생님께서 주석을 하고 싶은 문장들을 아래와 같이 입력하시면 되십니다.
@@ -41,36 +42,71 @@ sentence
 
 이후 추론 라인A 인코더 모델이나 추론 라인B의 디코더 모델을 실행하시려면 아래 명령어를 코랩에서 실행하시면 되십니다.
 
-## 주석 대상 문장 입력 방법
+## 추론 라인A 인코더 모델 실행 명령어 및 주석 결과 파일 위치
+
+코랩에서 구글 드라이브를 마운트 하신 후 아래 명령어를 실행해 주시면 되십니다.
+추론 라인A 학습 인코더(도메인 적응 학습+미세 조정 DeBERTa-v3-base-korean) 가중치 파일이 자동으로 선생님의 구글드라이브로 받아진 후 실행됩니다.
+코랩의 런타임 종류는 T4를 선택하시면 무리 없이 동작 가능합니다.
 
 ```text
-bash scripts/run_a_infer.sh \
+%cd /content/drive/MyDrive/kmwe
+
+!bash scripts/run_a_infer.sh \
   reviewer_inputs/a_input.csv \
   outputs/a_run \
-  auto \
-  /content/drive/MyDrive/kmwe/kmwe_coding/data/dict/expredict.xlsx
+  auto
 ```
 
-
-
-
-## 결과 파일
-
-주석 실행 결과는 `outputs/` 폴더에 저장됩니다.
-심사위원 선생님께서 주로 보시면 되는 파일은 아래 두 파일입니다.
+주석 결과는 아래 폴더와 파일을 열어 보시면 됩니다.
 
 ```text
 outputs/a_run/predictions.csv
+```
+
+선생님께서 예문들 그대로 실행하셨다면 아래 결과를 보실 수 있으십니다. 
+2~4행: ㄴ/은 적 있/없(경험 유무 서술) 주석 결과
+5~7행: 다면(가정/조건 제시) 주석 결과
+8~10행: 주석 대상 문법 항목 없음
+
+
+## 추론 라인B 디코더 모델 실행 명령어 및 주석 결과 파일 위치
+
+논문에 기록한 것과 같이 미세 조정된 GPT4.1을 사용한 주석 결과가 가장 좋습니다.
+그러나 미세 조정된 GPT4.1의 공개 가능 여부가 법적으로 불확실하여 미세 조정된 Llama 3.1 8b를 사용한 추론 라인을 올려드립니다. 
+
+코랩에서 구글 드라이브를 마운트 하신 후 아래 명령어를 실행해 주시면 되십니다.
+추론 라인B 학습 디코더(미세 조정된 Llama 모델)에 필요한 파일이 자동으로 선생님의 구글드라이브로 받아지고 실행됩니다.
+코랩 런타임은 12gb의 GPU 메모리를 필요로 하며 따라서 T4로 설정하는 것을 추천드립니다. 
+처음 실행할 때는 모델 다운로드(16gb)와 로딩에 시간이 걸릴 수 있습니다.
+
+```text
+%cd /content/drive/MyDrive/kmwe
+!bash scripts/run_b_infer.sh \
+  reviewer_inputs/b_input.csv \
+  outputs/b_run \
+  auto \
+  auto
+```
+
+주석 결과는 아래 폴더와 파일을 열어 보시면 됩니다.
+
+```text
 outputs/b_run/predictions.csv
 ```
 
-추가 확인용 파일도 함께 생성됩니다.필요하시면 보시면 되십니다.
+선생님께서 예문들 그대로 실행하셨다면 아래 결과를 보실 수 있으십니다. 
+2~3행: 고 말1(안타까움) 주석 결과
+4~5행: 고 말2(의지) 주석 결과
+6~7행: 까지1(범위의 끝) 주석 결과
+8~9행: 까지2(더함) 주석 결과
+10~11행: 까지3(지나침) 주석 결과
+12~13행: ㄴ/은/는데1(상황/배경 제시) 주석 결과
+14~15행: ㄴ/은/는데2(대립/대조) 주석 결과 
+15~16행: 주석 대상 문법 항목 없음. 16행에서 의존 명사 "~는데"를 규칙 라인이 찾지만 디코더가 오탐으로 판단합니다.
 
-```text
-predictions.jsonl
-debug_detection.jsonl
-summary.json
-```
+실행 결과를 보시면 Llama 3.1 8b 모델이 14행의 판단이 틀린 것을 발견할 수 있습니다.
+참고로 미세 조정된 GPT4.1은 모두 정답을 맞혔습니다.
+
 
 ## 모델 체크포인트
 
@@ -80,23 +116,13 @@ summary.json
 https://huggingface.co/nyh1006/kmwe-a-pipeline-encoder
 ```
 
-내려 받으시면 아래 구조 아래 구조가 되도록 두면 됩니다.
+필요하시면 내려 받으시면 되며내려 아래 구조가 되도록 두면 됩니다.
 
 ```text
 checkpoints/a_best/
 ├─ encoder/
 ├─ tokenizer/
 └─ head.pt
-```
-
-
-B 파이프라인 모델은 Qwen 기반 LLM 체크포인트입니다. Hugging Face에서 내려받거나, 로컬/Google Drive 경로를 직접 지정해서 사용할 수 있습니다.
-
-B 실행 시에는 아래 두 경로를 지정해야 합니다.
-
-```text
-B_MODEL_DIR
-B_TOKENIZER_DIR
 ```
 
 ## 빠른 실행 방법
