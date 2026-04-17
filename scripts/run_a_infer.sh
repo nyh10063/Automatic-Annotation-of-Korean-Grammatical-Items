@@ -38,6 +38,21 @@ INNER
   fi
 fi
 
+TOKENIZER_CONFIG="$A_BEST_DIR/tokenizer/tokenizer_config.json"
+if [ -f "$TOKENIZER_CONFIG" ]; then
+  TOKENIZER_CONFIG="$TOKENIZER_CONFIG" python3 - <<'INNER'
+import json
+import os
+from pathlib import Path
+p = Path(os.environ["TOKENIZER_CONFIG"])
+obj = json.loads(p.read_text(encoding="utf-8"))
+if isinstance(obj.get("vocab"), dict):
+    obj.pop("vocab", None)
+    p.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "
+", encoding="utf-8")
+INNER
+fi
+
 if [ ! -f "$INPUT_CSV" ]; then
   echo "[ERROR] input csv not found: $INPUT_CSV" >&2
   exit 1
