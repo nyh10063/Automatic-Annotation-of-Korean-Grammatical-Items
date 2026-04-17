@@ -1956,8 +1956,47 @@ def _build_encoder_scorer(
     try:
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir)
     except Exception as exc:
-        logger.warning("infer_step1 fast tokenizer 로드 실패 -> use_fast=False 재시도: %s", exc)
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir, use_fast=False)
+        logger.warning("infer_step1 fast tokenizer 로드 실패 -> tokenizer.json 직접 로드 재시도: %s", exc)
+        from transformers import PreTrainedTokenizerFast
+        import json
+
+        tokenizer_file = tokenizer_dir / "tokenizer.json"
+        special_tokens_map_path = tokenizer_dir / "special_tokens_map.json"
+        if not tokenizer_file.exists():
+            raise
+
+        def _special_token_value(value: Any) -> str | None:
+            if isinstance(value, str):
+                return value
+            if isinstance(value, dict):
+                content = value.get("content")
+                if isinstance(content, str):
+                    return content
+            return None
+
+        special_kwargs: dict[str, str] = {}
+        if special_tokens_map_path.exists():
+            try:
+                payload = json.loads(special_tokens_map_path.read_text(encoding="utf-8"))
+                for key in [
+                    "unk_token",
+                    "sep_token",
+                    "pad_token",
+                    "cls_token",
+                    "mask_token",
+                    "bos_token",
+                    "eos_token",
+                ]:
+                    token_value = _special_token_value(payload.get(key))
+                    if token_value is not None:
+                        special_kwargs[key] = token_value
+            except Exception as map_exc:
+                logger.warning("infer_step1 special_tokens_map 로드 실패: %s", map_exc)
+
+        tokenizer = PreTrainedTokenizerFast(
+            tokenizer_file=str(tokenizer_file),
+            **special_kwargs,
+        )
     model = AutoModel.from_pretrained(encoder_dir)
     model.to(device)
     head = None
