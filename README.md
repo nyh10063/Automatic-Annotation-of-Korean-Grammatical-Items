@@ -116,7 +116,8 @@ outputs/b_run/predictions.csv
 추론 라인A,B 모델은 Hugging Face에 공개되어 있습니다.
 
 ```text
-https://huggingface.co/nyh1006
+https://huggingface.co/anoymousfml/kmwe-a-pipeline-encoder
+https://huggingface.co/anoymousfml/kmwe-b-pipeline-llama-llm
 ```
 
 
