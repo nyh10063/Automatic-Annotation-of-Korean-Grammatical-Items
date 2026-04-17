@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
+
 if [ "$#" -lt 4 ]; then
   echo "Usage: bash scripts/run_a_infer.sh <input_csv> <output_dir> <a_best_dir|auto> <dict_xlsx>" >&2
   exit 1

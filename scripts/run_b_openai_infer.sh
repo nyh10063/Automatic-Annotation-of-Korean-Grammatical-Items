@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
+
 INPUT_CSV="${1:-reviewer_inputs/b_input.csv}"
 OUTPUT_DIR="${2:-outputs/b_openai_run}"
 DICT_XLSX="${3:-data/dict/expredict.xlsx}"

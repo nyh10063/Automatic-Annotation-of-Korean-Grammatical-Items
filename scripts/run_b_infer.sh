@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
+
 INPUT_CSV="${1:-reviewer_inputs/b_input.csv}"
 OUTPUT_DIR="${2:-outputs/b_run}"
 B_MODEL_DIR="${3:-checkpoints/b_model}"
