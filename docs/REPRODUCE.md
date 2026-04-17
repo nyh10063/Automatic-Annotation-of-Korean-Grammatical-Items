@@ -33,7 +33,7 @@ bash scripts/run_a_infer.sh \
   reviewer_inputs/a_input.csv \
   outputs/a_run \
   checkpoints/a_best \
-  /path/to/expredict.xlsx
+  data/dict/expredict_public.xlsx
 ```
 
 ## 4. Run B
@@ -44,7 +44,7 @@ bash scripts/run_b_infer.sh \
   outputs/b_run \
   /path/to/b_model \
   /path/to/b_tokenizer \
-  /path/to/expredict.xlsx
+  data/dict/expredict_public.xlsx
 ```
 
 ## 5. Inspect Results

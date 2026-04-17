@@ -4,15 +4,15 @@ set -euo pipefail
 
 export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
 
-if [ "$#" -lt 4 ]; then
-  echo "Usage: bash scripts/run_a_infer.sh <input_csv> <output_dir> <a_best_dir|auto> <dict_xlsx>" >&2
+if [ "$#" -lt 3 ]; then
+  echo "Usage: bash scripts/run_a_infer.sh <input_csv> <output_dir> <a_best_dir|auto> [dict_xlsx]" >&2
   exit 1
 fi
 
 INPUT_CSV="$1"
 OUTPUT_DIR="$2"
 A_BEST_DIR="$3"
-DICT_XLSX="$4"
+DICT_XLSX="${4:-data/dict/expredict_public.xlsx}"
 
 HF_REPO_ID="nyh1006/kmwe-a-pipeline-encoder"
 AUTO_ROOT="checkpoints/hf_a"

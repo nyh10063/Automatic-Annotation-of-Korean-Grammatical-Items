@@ -5,7 +5,7 @@ export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
 
 INPUT_CSV="${1:-reviewer_inputs/b_input.csv}"
 OUTPUT_DIR="${2:-outputs/b_openai_run}"
-DICT_XLSX="${3:-data/dict/expredict.xlsx}"
+DICT_XLSX="${3:-data/dict/expredict_public.xlsx}"
 OPENAI_MODEL_NAME="${OPENAI_MODEL:-gpt-4.1}"
 
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then

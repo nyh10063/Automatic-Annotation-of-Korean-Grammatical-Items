@@ -89,7 +89,7 @@ bash scripts/run_a_infer.sh \
   reviewer_inputs/a_input.csv \
   outputs/a_run \
   checkpoints/a_best \
-  /path/to/expredict.xlsx
+  data/dict/expredict_public.xlsx
 ```
 
 B 파이프라인 실행:
@@ -100,7 +100,7 @@ bash scripts/run_b_infer.sh \
   outputs/b_run \
   /path/to/b_model \
   /path/to/b_tokenizer \
-  /path/to/expredict.xlsx
+  data/dict/expredict_public.xlsx
 ```
 
 ## 선택 실행: GPT-4.1 사용
@@ -120,7 +120,7 @@ export OPENAI_MODEL="gpt-4.1"
 bash scripts/run_b_openai_infer.sh \
   reviewer_inputs/b_input.csv \
   outputs/b_openai_run \
-  /path/to/expredict.xlsx
+  data/dict/expredict_public.xlsx
 ```
 
 만약 fine-tuned GPT-4.1 모델을 사용하려면 `OPENAI_MODEL`에 해당 fine-tuned model id를 넣으면 됩니다.

@@ -5,7 +5,7 @@ exp:
   - kmwe
 paths:
   project_root: __AUTO__
-  dict_xlsx: data/dict/expredict.xlsx
+  dict_xlsx: data/dict/expredict_public.xlsx
   infer_input_csv: data/infer/input.csv
   data_dir: data
   artifacts_dir: artifacts
