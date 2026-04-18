@@ -126,8 +126,9 @@ https://huggingface.co/anoymousfml/kmwe-b-pipeline-llama-llm
 
 ## 라이선스와 사용 범위
 
-코드 라이선스와 모델 사용 조건은 별도로 정리합니다.   
-
 공개 체크포인트는 기반 모델의 라이선스 조건을 함께 따릅니다. 특히 B 파이프라인 LLM은 meta-llama/Llama-3.1-8B Base model 기반 모델을 사용하므로, 사용자는 해당 기반 모델의 라이선스 조건도 함께 준수해야 합니다.  
-  
+
+이 프로젝트는 한국어 형태소 분석을 위해 `kiwipiepy`를 사용합니다.  
+`kiwipiepy`는 GNU Lesser General Public License v3 (LGPLv3)로 배포되므로, 사용자는 해당 라이선스 조건을 함께 준수해야 합니다.
+
 이 저장소는 논문 검증, 연구, 교육 목적의 실행을 돕기 위해 공개합니다.  
